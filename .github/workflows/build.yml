@@ -85,7 +85,7 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           | Property | Value |
           | :--- | :--- |
-          | Name | $($finalImageName) ${{ env.version }} (${{ env.build }}) |
+          | Name | $($finalImageName) ${{ env.version }} |
           | Build | $($iso.build) |
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
