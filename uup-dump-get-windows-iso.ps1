@@ -163,17 +163,19 @@ function Get-UupDumpIso($name, $target) {
                 Write-Host "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
                 $result = $false
             }
+
             if ($target.edition -contains "Multi"){
                 if (($editions -notcontains "Professional") -and ($editions -notcontains "core")) {
                     Write-Host "Skipping. Expected editions=$($target.edition). Got editions=$($editions -join ',')."
                     $result = $false
+                }
             }
             else ($editions -notcontains $target.edition) {
                 Write-Host "Skipping. Expected editions=$($target.edition). Got editions=$($editions -join ',')."
                 $result = $false
             }
+            
             $result
-        } `
         | Select-Object -First 1 `
         | ForEach-Object {
             $id = $_.Value.uuid
