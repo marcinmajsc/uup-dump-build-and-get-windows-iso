@@ -1,5 +1,5 @@
 name: build
-run-name: Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.language }} ${{ inputs.esd != '' ? 'ESD' }} ${{ inputs.drivers != '' ? 'DRIVERS' }} ${{ inputs.netfx3 != '' ? 'NetFX3' }}
+run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.language }} ${{ contains(inputs.esd) && 'ESD' }}"
 
 on:
   workflow_dispatch:
