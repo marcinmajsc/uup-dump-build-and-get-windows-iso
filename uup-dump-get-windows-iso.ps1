@@ -301,9 +301,11 @@ function Get-WindowsIso($name, $destinationDirectory) {
     }
     if ($drivers) {
         $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'
+        $tag = $tag + ".DRIVERS"
     }
     if ($netfx3) {
         $convertConfig = $convertConfig -replace '^(NetFx3\s*)=.*', '$1=1'
+        $tag = $tag + ".NetFX3"
     }
     if ($iso.virtualEdition) {
         $convertConfig = $convertConfig `
