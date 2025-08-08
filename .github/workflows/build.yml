@@ -1,5 +1,5 @@
 name: build
-run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.language }} ${{ (inputs.esd) && 'ESD' }}"
+run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.language }} ${{ (inputs.esd) && 'ESD' }} ${{ (inputs.drivers) && 'DRIVERS' }} ${{ (inputs.netfx3) && 'NETFX3' }}"
 
 on:
   workflow_dispatch:
