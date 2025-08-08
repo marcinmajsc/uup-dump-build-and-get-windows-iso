@@ -158,7 +158,7 @@ jobs:
             } else {
               $finalImageName = $imageNames -join '/'
             }
-          } else ($imageNames.Count -eq 1) {
+          } else{
             $finalImageName = $imageNames[0]
           } 
 
