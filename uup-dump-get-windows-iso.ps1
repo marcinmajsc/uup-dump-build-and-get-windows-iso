@@ -294,9 +294,10 @@ function Get-WindowsIso($name, $destinationDirectory) {
         -replace '^(AutoExit\s*)=.*','$1=1' `
         -replace '^(ResetBase\s*)=.*','$1=1' `
         -replace '^(Cleanup\s*)=.*','$1=1'
-    $tag = "asd"
+    $tag = ""
     if ($esd) {
         $convertConfig = $convertConfig -replace '^(wim2esd\s*)=.*', '$1=1'
+        $tag = $tag + ".ESD"
     }
     if ($drivers) {
         $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'
