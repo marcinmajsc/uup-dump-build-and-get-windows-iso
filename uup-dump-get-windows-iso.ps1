@@ -46,8 +46,6 @@ $TARGETS = @{
     }
 }
 
-$tags = ''
-
 function New-QueryString([hashtable]$parameters) {
     @($parameters.GetEnumerator() | ForEach-Object {
         "$($_.Key)=$([System.Web.HttpUtility]::UrlEncode($_.Value))"
@@ -298,7 +296,12 @@ function Get-WindowsIso($name, $destinationDirectory) {
         -replace '^(Cleanup\s*)=.*','$1=1'
     if ($esd) {
         $convertConfig = $convertConfig -replace '^(wim2esd\s*)=.*', '$1=1'
-        $tags = $tags + '.ESD'
+        if ($tags) {
+            $tags = $tags + '.ESD'
+        }
+        else {
+            $tags = '.ESD'
+        }
     }
     if ($drivers) {
         $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'
