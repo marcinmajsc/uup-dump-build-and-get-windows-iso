@@ -159,7 +159,7 @@ jobs:
               $finalImageName = $imageNames -join '/'
             }
           } else{
-            $finalImageName = $imageNames[0]
+            $finalImageName = $imageNames
           } 
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
