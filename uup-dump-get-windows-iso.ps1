@@ -48,7 +48,7 @@ $TARGETS = @{
         search = "windows 11 $(if (-not $preview) { '26100 ' } else { '' })$arch" # aka 24H2.
         edition = $(if ($edition -eq "core" -or $edition -eq "home") { "Core" } elseif ($edition -eq "multi") { "Multi" } else { "Professional" })
         virtualEdition = $null
-        ring = $(if ($preview) { "Canary" } else { $null })
+        ring = $(if ($preview) { 'CANARY' } else { $null })
     }
 }
 
@@ -154,7 +154,6 @@ function Get-UupDumpIso($name, $target) {
             #   1. are from the expected ring/channel (default retail)
             #   2. have the english language
             #   3. match the requested edition
-            $ring = $_.Value.info.ring
             $langs = $_.Value.langs.PSObject.Properties.Name
             $editions = $_.Value.editions.PSObject.Properties.Name
             $result = $true
@@ -163,10 +162,6 @@ function Get-UupDumpIso($name, $target) {
             } else {
                 'RETAIL'
             }
-            # if ($ring -ne $expectedRing) {
-            #     Write-Host "Skipping. Expected ring=$expectedRing. Got ring=$ring."
-            #     $result = $false
-            # }
             if ($langs -notcontains $lang) {
                 Write-Host "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
                 $result = $false
