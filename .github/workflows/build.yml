@@ -1,9 +1,17 @@
 name: build
-run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.language }} ${{ (inputs.esd) && 'ESD' || '' }} ${{ (inputs.drivers) && 'DRIVERS' || '' }} ${{ (inputs.netfx3) && 'NETFX3' || '' }}"
+run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.architecture}} ${{ inputs.language }} ${{ (inputs.esd) && 'ESD' || '' }} ${{ (inputs.drivers) && 'DRIVERS' || '' }} ${{ (inputs.netfx3) && 'NETFX3' || '' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: "Windows architecture to build"
+        type: choice
+        options:
+        - x64
+        - arm64
+        default: x64
+        required: true
       versions:
         description: "Windows version to build"
         type: choice
@@ -88,7 +96,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: ${{ (inputs.architecture) == 'x64' && 'windows-2022' || (inputs.architecture) == 'arm64' && 'windows-11-arm' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -117,15 +125,15 @@ jobs:
 
       - name: Build Windows 11 24H2
         if: ${{ inputs.versions == 'Windows 11 24H2' }}
-        run: pwsh uup-dump-get-windows-iso.ps1 windows-11 c:/output -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
+        run: pwsh uup-dump-get-windows-iso.ps1 windows-11 c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
 
       - name: Build Windows 11 23H2
         if: ${{ inputs.versions == 'Windows 11 23H2' }}
-        run: pwsh uup-dump-get-windows-iso.ps1 windows-11old c:/output -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
+        run: pwsh uup-dump-get-windows-iso.ps1 windows-11old c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
 
       - name: Build Windows 10 22H2
         if: ${{ inputs.versions == 'Windows 10 22H2' }}
-        run: pwsh uup-dump-get-windows-iso.ps1 windows-10 c:/output -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
+        run: pwsh uup-dump-get-windows-iso.ps1 windows-10 c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
 
       - name: Show available disk space after build
         run: Get-PSDrive -PSProvider FileSystem
@@ -167,6 +175,7 @@ jobs:
           | :--- | :--- |
           | Name | $($finalImageName) ${{ env.version }} |
           | Build | $($iso.build) |
+          | Architecture | ${{ inputs.architecture}} |
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:artifact_url) |
@@ -188,7 +197,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "${{ env.tagname }}"
-          name: "${{ env.images }} ${{ env.version }} (${{ env.build }})"
+          name: "${{ env.images }} ${{ inputs.architecture}} ${{ env.version }} (${{ env.build }})"
           body_path: summary.md
           draft: false
           prerelease: false
