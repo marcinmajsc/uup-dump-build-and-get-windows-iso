@@ -152,7 +152,7 @@ function Get-UupDumpIso($name, $target) {
             #   1. are from the expected ring/channel (default retail)
             #   2. have the english language
             #   3. match the requested edition
-            $ring = "Canary"
+            $ring = $_.Value.info.ring
             $langs = $_.Value.langs.PSObject.Properties.Name
             $editions = $_.Value.editions.PSObject.Properties.Name
             $result = $true
