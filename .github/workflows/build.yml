@@ -74,6 +74,11 @@ on:
         - zh-tw
         default: en-us
         required: true
+      preview:
+        description: "Build Canary version"
+        type: boolean
+        required: true
+        default: false
       esd:
         description: "Use ESD compression"
         type: boolean
@@ -111,6 +116,10 @@ jobs:
 
       # NB we are writing outside of the current working/job directory
       #    because it does not have sufficient available disk space.
+      - name: Enable Canary
+        if: ${{ inputs.preview }}
+        run: echo "options=${{ env.options }} -preview" >> $env:GITHUB_ENV
+        
       - name: Enable ESD
         if: ${{ inputs.esd }}
         run: echo "options=${{ env.options }} -esd" >> $env:GITHUB_ENV
