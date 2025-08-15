@@ -31,6 +31,10 @@ if ($windowsTargetName -match 'beta|dev|canary') {
     $ringLower = @('beta','dev','canary').Where({$windowsTargetName -match $_})[0]
 }
 
+if ($ringLower -eq 'dev') {
+    $ringLower = 'dev|wif'
+}
+
 function Get-EditionName($e) {
     switch ($e.ToLower()) {
         "core" { "Core" }
@@ -111,8 +115,8 @@ function Get-UupDumpIso($name, $target) {
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
             $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
-            if ($_.Value.info.ring.ToUpper() -ne $expectedRing) {
-                Write-Host "Skipping. Expected ring=$expectedRing. Got ring=$($_.Value.info.ring)."
+            if ($_.Value.info.ring -notmatch $ringLower) {
+                Write-Host "Skipping. Expected ring match for $ringLower. Got ring=$($_.Value.info.ring)."
                 $res = $false
             }
             if ($langs -notcontains $lang) {
