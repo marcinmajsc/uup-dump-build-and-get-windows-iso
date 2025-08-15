@@ -247,11 +247,11 @@ function Get-IsoWindowsImages($isoPath) {
 
 function Get-WindowsIso($name, $destinationDirectory) {
     $iso = Get-UupDumpIso $name $TARGETS.$name
-#    if (-not $preview && -not ($iso.title -match 'version')) {
-#      throw "Unexpected title format: missing 'version'"
-#    }
+    if ( (!$preview) -and (-not ($iso.title -match 'version')) ) {
+      throw "Unexpected title format: missing 'version'"
+    }
     $parts = $iso.title -split 'version\s*'
-    if ($parts.Count -lt 2) {
+    if ( (!$preview) -and ($parts.Count -lt 2) ) {
       throw "Unexpected title format, split resulted in less than 2 parts: $($parts -join '|')"
     }
     $verbuild = $parts[1] -split '[\s\(]' | Select-Object -First 1
