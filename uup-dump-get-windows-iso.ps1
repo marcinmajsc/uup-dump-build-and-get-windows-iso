@@ -16,6 +16,8 @@ param(
 Set-StrictMode -Version Latest
 $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
+$preview   = $false
+$ringLower = $null
 trap {
     Write-Host "ERROR: $_"
     @(($_.ScriptStackTrace -split '\r?\n') -replace '^(.*)$','ERROR: $1') | Write-Host
@@ -115,7 +117,7 @@ function Get-UupDumpIso($name, $target) {
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
             $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
-            if ($_.Value.info.ring -notmatch $ringLower) {
+            if ($ringLower -and ($_.Value.info.ring -notmatch $ringLower)) {
                 Write-Host "Skipping. Expected ring match for $ringLower. Got ring=$($_.Value.info.ring)."
                 $res = $false
             }
