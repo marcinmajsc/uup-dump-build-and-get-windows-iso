@@ -263,6 +263,9 @@ function Get-WindowsIso($name, $destinationDirectory) {
      #        throw "unexpected $name build: $($iso.build)"
      #    }
     }
+    else {
+         $verbuild = "Insider Preview"
+    }
     $buildDirectory = "$destinationDirectory/$name"
     $destinationIsoPath = "$buildDirectory.iso"
     $destinationIsoMetadataPath = "$destinationIsoPath.json"
