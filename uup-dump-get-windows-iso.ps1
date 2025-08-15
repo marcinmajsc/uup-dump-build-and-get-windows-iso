@@ -264,7 +264,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
      #    }
     }
     else {
-         $verbuild = "Insider Preview"
+         $verbuild = "Insider"
     }
     $buildDirectory = "$destinationDirectory/$name"
     $destinationIsoPath = "$buildDirectory.iso"
