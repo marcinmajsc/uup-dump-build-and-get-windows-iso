@@ -167,6 +167,7 @@ function Get-IsoWindowsImages($isoPath) {
 
 function Get-WindowsIso($name, $destinationDirectory) {
     $iso = Get-UupDumpIso $name $TARGETS.$name
+    $hasVirtual = $iso -and ($iso.PSObject.Properties.Name -contains 'virtualEdition') -and $iso.virtualEdition
     if (!$preview) {
         if (-not ($iso.title -match 'version')) { throw "Unexpected title format: missing 'version'" }
         $parts = $iso.title -split 'version\s*'
@@ -184,11 +185,12 @@ function Get-WindowsIso($name, $destinationDirectory) {
     if (Test-Path $buildDirectory) { Remove-Item -Force -Recurse $buildDirectory | Out-Null }
     New-Item -ItemType Directory -Force $buildDirectory | Out-Null
 
-    $edn = if ($iso.virtualEdition) { $iso.virtualEdition } else { $iso.edition }
+    $edn = if ($hasVirtual) { $iso.virtualEdition } else { $iso.edition }
+    Write-Host $edn
     $title = "$name $edn $($iso.build)"
 
     Write-Host "Downloading the UUP dump download package for $title from $($iso.downloadPackageUrl)"
-    $downloadPackageBody = if ($iso.virtualEdition) { @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition } } else { @{ autodl=2; updates=1; cleanup=1 } }
+    $downloadPackageBody = if ($hasVirtual) { @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition } } else { @{ autodl=2; updates=1; cleanup=1 } }
     Invoke-WebRequest -Method Post -Uri $iso.downloadPackageUrl -Body $downloadPackageBody -OutFile "$buildDirectory.zip" | Out-Null
     Expand-Archive "$buildDirectory.zip" $buildDirectory
 
@@ -200,8 +202,8 @@ function Get-WindowsIso($name, $destinationDirectory) {
     if ($esd) { $convertConfig = $convertConfig -replace '^(wim2esd\s*)=.*', '$1=1'; $tag += ".E" }
     if ($drivers -and $arch -ne "arm64") { $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'; $tag += ".D"; Write-Host "Copy Dell drivers to $buildDirectory directory"; Copy-Item -Path Drivers -Destination $buildDirectory/Drivers -Recurse }
     if ($netfx3) { $convertConfig = $convertConfig -replace '^(NetFx3\s*)=.*', '$1=1'; $tag += ".N" }
-    if ($iso.virtualEdition) {
-        $convertConfig = $convertConfig -replace '^(StartVirtual\s*)=.*','$1=1' -replace '^(vDeleteSource\s*)=.*','$1=1' -replace '^(vAutoEditions\s*)=.*',"`$1=$($iso.virtualEdition)"
+    if ($hasVirtual) {
+    $convertConfig = $convertConfig -replace '^(StartVirtual\s*)=.*','$1=1' -replace '^(vDeleteSource\s*)=.*','$1=1' -replace '^(vAutoEditions\s*)=.*',"`$1=$($iso.virtualEdition)"
     }
     Set-Content -Encoding ascii -Path $buildDirectory/ConvertConfig.ini -Value $convertConfig
 
