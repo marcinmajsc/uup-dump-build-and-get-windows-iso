@@ -94,7 +94,7 @@ function Get-UupDumpIso($name, $target) {
             if ($result.response.updateInfo.build -ne $_.Value.build) { throw 'for some reason listlangs returned an unexpected build' }
             $_.Value | Add-Member -NotePropertyMembers @{ langs = $result.response.langFancyNames; info = $result.response.updateInfo }
             $langs = $_.Value.langs.PSObject.Properties.Name
-            $ eds = if ($langs -contains $lang) {
+            $eds = if ($langs -contains $lang) {
                 Write-Host "Getting the $name $id editions metadata"
                 $result = Invoke-UupDumpApi listeditions @{ id = $id; lang = $lang }
                 $result.response.editionFancyNames
@@ -109,6 +109,11 @@ function Get-UupDumpIso($name, $target) {
             $langs = $_.Value.langs.PSObject.Properties.Name
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
+            $expectedRing = if ($target.PSObject.Properties.Name -contains 'ring') { $target.ring.ToUpper() } else { 'RETAIL' }
+            if ($_.Value.info.ring.ToUpper() -ne $expectedRing) {
+                Write-Host "Skipping. Expected ring=$expectedRing. Got ring=$($_.Value.info.ring)."
+                $res = $false
+            }
             if ($langs -notcontains $lang) {
                 Write-Host "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
                 $res = $false
@@ -136,7 +141,7 @@ function Get-UupDumpIso($name, $target) {
                 virtualEdition = $target.virtualEdition
                 apiUrl = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ id = $id; lang = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
                 downloadUrl = 'https://uupdump.net/download.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
-                downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;Professional" } else { $target.edition } })
+                downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
             }
         }
 }
