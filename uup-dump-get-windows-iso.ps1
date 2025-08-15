@@ -50,7 +50,7 @@ $TARGETS = @{
 }
 
 function New-QueryString([hashtable]$parameters) {
-    @($parameters.GetEnumerator() | ForEach-Object { "$($_.Key)=$([System.Web.HttpUtility]::UrlEncode($_.Value))" }) -join '&'
+    @($parameters.GetEnumerator() | ForEach-Object { "$($_.Key)=$([System.Net.WebUtility]::UrlEncode([string]$_.Value))" }) -join '&'
 }
 
 function Invoke-UupDumpApi([string]$name, [hashtable]$body) {
@@ -61,7 +61,8 @@ function Invoke-UupDumpApi([string]$name, [hashtable]$body) {
             Write-Host "Retrying the uup-dump api ${name} request #$n"
         }
         try {
-            return Invoke-RestMethod -Method Get -Uri "https://api.uupdump.net/$name.php" -Body $body
+            $qs = if ($body) { '?' + (New-QueryString $body) } else { '' }
+            return Invoke-RestMethod -Method Get -Uri ("https://api.uupdump.net/{0}.php{1}" -f $name, $qs)
         } catch {
             Write-Host "WARN: failed the uup-dump api $name request: $_"
         }
