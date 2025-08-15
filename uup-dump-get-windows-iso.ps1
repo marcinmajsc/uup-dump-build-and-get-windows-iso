@@ -110,7 +110,7 @@ function Get-UupDumpIso($name, $target) {
             $langs = $_.Value.langs.PSObject.Properties.Name
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
-            $expectedRing = if ($target.PSObject.Properties.Name -contains 'ring') { $target.ring.ToUpper() } else { 'RETAIL' }
+            $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
             if ($_.Value.info.ring.ToUpper() -ne $expectedRing) {
                 Write-Host "Skipping. Expected ring=$expectedRing. Got ring=$($_.Value.info.ring)."
                 $res = $false
