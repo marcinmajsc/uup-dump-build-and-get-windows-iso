@@ -1,5 +1,5 @@
 name: build
-run-name: "Build ${{ inputs.versions }} ${{ inputs.edition && toUpper(inputs.edition) }} ${{ inputs.architecture && toUpper(inputs.architecture) }} ${{ toUpper(fromJSON('\"' + inputs.language + '\"').split('-')[0]) }} ${{ (inputs.esd) && 'ESD' || '' }} ${{ (inputs.drivers) && 'DRIVERS' || '' }} ${{ (inputs.netfx3) && 'NETFX3' || '' }}"
+run-name: "Build ${{ inputs.versions }} ${{ toUpper(inputs.edition) }} ${{ toUpper(inputs.architecture) }} ${{ toUpper(fromJSON('\"' + inputs.language + '\"').split('-')[0]) }} ${{ inputs.esd && 'ESD' || '' }} ${{ inputs.drivers && 'DRIVERS' || '' }} ${{ inputs.netfx3 && 'NETFX3' || '' }}"
 
 on:
   workflow_dispatch:
@@ -99,11 +99,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show available disk space before build
+      - name: Init options
         shell: pwsh
-        run: |
-          Get-PSDrive -PSProvider FileSystem
-          echo "options=" >> $env:GITHUB_ENV
+        run: echo "options=" >> $env:GITHUB_ENV
 
       - name: Enable ESD
         if: ${{ inputs.esd }}
@@ -127,10 +125,6 @@ jobs:
           pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} $env:options
           echo "iso_name=$env:ISO_NAME" >> $env:GITHUB_OUTPUT
 
-      - name: Show available disk space after build
-        shell: pwsh
-        run: Get-PSDrive -PSProvider FileSystem
-
       - name: Upload artifact
         id: upload_artifact
         uses: actions/upload-artifact@v4
@@ -139,14 +133,11 @@ jobs:
           path: c:/output/*.ISO
           if-no-files-found: error
 
-      - name: Set artifact_url
-        id: set_artifact_url
-        shell: pwsh
-        run: echo "artifact_url=${{ steps.upload_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
-
       - name: Build summary
         id: build_summary
         shell: pwsh
+        env:
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
         run: |
           $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
@@ -166,29 +157,22 @@ jobs:
           @"
           | Property | Value |
           | :--- | :--- |
-          | Name | $finalImageName $env:version |
+          | Name | $finalImageName $($iso.version) |
           | Build | $($iso.build) |
           | Architecture | ${{ inputs.architecture }} |
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
-          | Iso | [$env:ISO_NAME]($env:artifact_url) |
+          | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY
 
           (Get-Content $env:GITHUB_STEP_SUMMARY) | Set-Content summary.md
-
-          echo "build=$($iso.build)" >> $env:GITHUB_ENV
-          echo "version=$($iso.version)" >> $env:GITHUB_ENV
-          echo "images=$finalImageName" >> $env:GITHUB_ENV
-          echo "tagname=v$($iso.build).$($iso.version).${{ inputs.language }}$($iso.tags)" >> $env:GITHUB_ENV
-
           echo "build=$($iso.build)" >> $env:GITHUB_OUTPUT
           echo "version=$($iso.version)" >> $env:GITHUB_OUTPUT
           echo "images=$finalImageName" >> $env:GITHUB_OUTPUT
           echo "tagname=v$($iso.build).$($iso.version).${{ inputs.language }}$($iso.tags)" >> $env:GITHUB_OUTPUT
 
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
