@@ -139,7 +139,7 @@ function Get-UupDumpIso($name, $target) {
                 build = $_.Value.build
                 id = $id
                 edition = $target.edition
-                virtualEdition = $target.virtualEdition
+                virtualEdition = $target['virtualEdition']
                 apiUrl = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ id = $id; lang = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
                 downloadUrl = 'https://uupdump.net/download.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
                 downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
