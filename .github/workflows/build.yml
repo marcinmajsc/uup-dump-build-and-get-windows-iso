@@ -1,5 +1,5 @@
 name: build
-run-name: "Build ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.architecture}} ${{ inputs.language }} ${{ (inputs.esd) && 'ESD' || '' }} ${{ (inputs.drivers) && 'DRIVERS' || '' }} ${{ (inputs.netfx3) && 'NETFX3' || '' }}"
+run-name: "Build ${{ inputs.versions }} ${{ inputs.edition && toUpper(inputs.edition) }} ${{ inputs.architecture && toUpper(inputs.architecture) }} ${{ toUpper(fromJSON('\"' + inputs.language + '\"').split('-')[0]) }} ${{ (inputs.esd) && 'ESD' || '' }} ${{ (inputs.drivers) && 'DRIVERS' || '' }} ${{ (inputs.netfx3) && 'NETFX3' || '' }}"
 
 on:
   workflow_dispatch:
@@ -7,9 +7,7 @@ on:
       architecture:
         description: "Windows architecture to build"
         type: choice
-        options:
-        - x64
-        - arm64
+        options: [x64, arm64]
         default: x64
         required: true
       versions:
@@ -27,10 +25,7 @@ on:
       edition:
         description: "Windows edition to build"
         type: choice
-        options:
-        - Pro
-        - Home
-        - Multi
+        options: [Pro, Home, Multi]
         default: Pro
         required: true
       language:
@@ -99,56 +94,59 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ (inputs.architecture) == 'x64' && 'windows-2022' || (inputs.architecture) == 'arm64' && 'windows-11-arm' }}
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Log the available disk space, so we can inspect it later.
-      # NB GitHub-hosted runners have limited available disk space.
-      #    see https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
       - name: Show available disk space before build
+        shell: pwsh
         run: |
           Get-PSDrive -PSProvider FileSystem
           echo "options=" >> $env:GITHUB_ENV
 
-      # NB we are writing outside of the current working/job directory
-      #    because it does not have sufficient available disk space.
-        
       - name: Enable ESD
         if: ${{ inputs.esd }}
-        run: echo "options=${{ env.options }} -esd" >> $env:GITHUB_ENV
+        shell: pwsh
+        run: echo "options=$env:options -esd" >> $env:GITHUB_ENV
 
       - name: Enable additional drivers
         if: ${{ inputs.drivers }}
-        run: echo "options=${{ env.options }} -drivers" >> $env:GITHUB_ENV
+        shell: pwsh
+        run: echo "options=$env:options -drivers" >> $env:GITHUB_ENV
 
       - name: Enable .NET Framework 3.5
         if: ${{ inputs.netfx3 }}
-        run: echo "options=${{ env.options }} -netfx3" >> $env:GITHUB_ENV
+        shell: pwsh
+        run: echo "options=$env:options -netfx3" >> $env:GITHUB_ENV
 
       - name: Build Windows
-        run: pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }}${{ env.options }}
+        id: build_windows
+        shell: pwsh
+        run: |
+          pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} $env:options
+          echo "iso_name=$env:ISO_NAME" >> $env:GITHUB_OUTPUT
 
       - name: Show available disk space after build
+        shell: pwsh
         run: Get-PSDrive -PSProvider FileSystem
 
       - name: Upload artifact
         id: upload_artifact
         uses: actions/upload-artifact@v4
-        # env:
-        #  ISO_NAME: ${{ steps.build.outputs.ISO_NAME }}
         with:
-          name: ${{ env.ISO_NAME }}
+          name: ${{ steps.build_windows.outputs.iso_name }}
           path: c:/output/*.ISO
-          if-no-files-found: error 
-      
+          if-no-files-found: error
+
       - name: Set artifact_url
         id: set_artifact_url
+        shell: pwsh
         run: echo "artifact_url=${{ steps.upload_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
-        
+
       - name: Build summary
         id: build_summary
+        shell: pwsh
         run: |
           $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
@@ -161,38 +159,42 @@ jobs:
             } else {
               $finalImageName = $imageNames -join '/'
             }
-          } else{
+          } else {
             $finalImageName = $imageNames
-          } 
+          }
 
-          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          @"
           | Property | Value |
           | :--- | :--- |
-          | Name | $($finalImageName) ${{ env.version }} |
+          | Name | $finalImageName $env:version |
           | Build | $($iso.build) |
-          | Architecture | ${{ inputs.architecture}} |
+          | Architecture | ${{ inputs.architecture }} |
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:artifact_url) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
-          "@
-          # Save the GITHUB_STEP_SUMMARY contents to a file
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
+
           (Get-Content $env:GITHUB_STEP_SUMMARY) | Set-Content summary.md
+
           echo "build=$($iso.build)" >> $env:GITHUB_ENV
           echo "version=$($iso.version)" >> $env:GITHUB_ENV
-          echo "name=$($iso.name)" >> $env:GITHUB_ENV
-          echo "title=$($iso.title)" >> $env:GITHUB_ENV
-          echo "images=$($finalImageName)" >> $env:GITHUB_ENV
-          echo "RUN_NAME=$($finalImageName) $($iso.version) ($($iso.build))" >> $GITHUB_ENV
+          echo "images=$finalImageName" >> $env:GITHUB_ENV
           echo "tagname=v$($iso.build).$($iso.version).${{ inputs.language }}$($iso.tags)" >> $env:GITHUB_ENV
+
+          echo "build=$($iso.build)" >> $env:GITHUB_OUTPUT
+          echo "version=$($iso.version)" >> $env:GITHUB_OUTPUT
+          echo "images=$finalImageName" >> $env:GITHUB_OUTPUT
+          echo "tagname=v$($iso.build).$($iso.version).${{ inputs.language }}$($iso.tags)" >> $env:GITHUB_OUTPUT
+
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: "${{ env.tagname }}"
-          name: "${{ env.images }} ${{ inputs.architecture}} ${{ env.version }} (${{ env.build }})"
+          tag_name: ${{ steps.build_summary.outputs.tagname }}
+          name: "${{ steps.build_summary.outputs.images }} ${{ inputs.architecture }} ${{ steps.build_summary.outputs.version }} (${{ steps.build_summary.outputs.build }})"
           body_path: summary.md
           draft: false
           prerelease: false
