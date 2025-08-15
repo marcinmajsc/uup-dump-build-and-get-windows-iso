@@ -72,6 +72,7 @@ function Invoke-UupDumpApi([string]$name, [hashtable]$body) {
                 -Uri "https://api.uupdump.net/$name.php" `
                 -Body $body
         } catch {
+            Write-Host $body
             Write-Host "WARN: failed the uup-dump api $name request: $_"
         }
     }
