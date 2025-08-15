@@ -109,7 +109,7 @@ function Get-UupDumpIso($name, $target) {
             $langs = $_.Value.langs.PSObject.Properties.Name
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
-            $expectedRing = if ($target.PSObject.Properties.Name -contains 'ring') { $target.ring.ToUpper() } else { 'RETAIL' }
+            $expectedRing = if ($target.PSObject.Properties.Name -contains 'ring') { $target.ring.ToUpper() } else { 'Retail' }
             if ($_.Value.info.ring.ToUpper() -ne $expectedRing) {
                 Write-Host "Skipping. Expected ring=$expectedRing. Got ring=$($_.Value.info.ring)."
                 $res = $false
@@ -119,8 +119,8 @@ function Get-UupDumpIso($name, $target) {
                 $res = $false
             }
             if ((Get-EditionName $edition) -eq "Multi") {
-                if (($editions -notcontains "Professional") -and ($editions -notcontains "core")) {
-                    Write-Host "Skipping. Expected editions=Multi (Professional/core). Got editions=$($editions -join ',')."
+                if (($editions -notcontains "professional") -and ($editions -notcontains "core")) {
+                    Write-Host "Skipping. Expected editions=Multi (Professional/Core). Got editions=$($editions -join ',')."
                     $res = $false
                 }
             } elseif ($editions -notcontains (Get-EditionName $edition)) {
