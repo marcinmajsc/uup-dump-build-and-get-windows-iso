@@ -68,6 +68,22 @@ The ISO metadata is a JSON document alike:
 }
 ```
 
+## Tags structure
+
+```text
+  .------------------------------- OS Build
+  |    .-------------------------- System Revision
+  |    |    .--------------------- Release Version
+  |    |    |    .---------------- System Edition
+  |    |    |    |   .------------ CPU architecture
+  |    |    |    |   |  .--------- Language
+  |    |    |    |   |  |  .------ If set image was ESD compression
+  |    |    |    |   |  |  | .---- If set additional driver is included
+  |    |    |    |   |  |  | | .-- If set .NET Framework 3.5 is included
+__|__ _|__ _|__ _|_ _|_ |_ | | |
+26100.4946.24H2.PRO.X64.PL.E.D.N
+```
+
 ## Related Tools
 
 * [Rufus](https://github.com/pbatard/rufus)
