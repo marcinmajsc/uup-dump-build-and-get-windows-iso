@@ -167,6 +167,10 @@ function Get-IsoWindowsImages($isoPath) {
 
 function Get-WindowsIso($name, $destinationDirectory) {
     $iso = Get-UupDumpIso $name $TARGETS.$name
+    if (-not $iso) { throw "Brak dopasowania UUP dla $name ($($TARGETS.$name.search)), lang=$lang." }
+    $isoHasEdition  = $iso.PSObject.Properties.Name -contains 'edition' -and $iso.edition
+    $hasVirtual     = $iso.PSObject.Properties.Name -contains 'virtualEdition' -and $iso.virtualEdition
+    $effectiveEdition = if ($isoHasEdition) { $iso.edition } else { $TARGETS.$name.edition }
     $hasVirtual = $iso -and ($iso.PSObject.Properties.Name -contains 'virtualEdition') -and $iso.virtualEdition
     if (!$preview) {
         if (-not ($iso.title -match 'version')) { throw "Unexpected title format: missing 'version'" }
@@ -185,7 +189,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
     if (Test-Path $buildDirectory) { Remove-Item -Force -Recurse $buildDirectory | Out-Null }
     New-Item -ItemType Directory -Force $buildDirectory | Out-Null
 
-    $edn = if ($hasVirtual) { $iso.virtualEdition } else { $iso.edition }
+    $edn = if ($hasVirtual) { $iso.virtualEdition } else { $effectiveEdition }
     Write-Host $edn
     $title = "$name $edn $($iso.build)"
 
@@ -203,7 +207,10 @@ function Get-WindowsIso($name, $destinationDirectory) {
     if ($drivers -and $arch -ne "arm64") { $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'; $tag += ".D"; Write-Host "Copy Dell drivers to $buildDirectory directory"; Copy-Item -Path Drivers -Destination $buildDirectory/Drivers -Recurse }
     if ($netfx3) { $convertConfig = $convertConfig -replace '^(NetFx3\s*)=.*', '$1=1'; $tag += ".N" }
     if ($hasVirtual) {
-    $convertConfig = $convertConfig -replace '^(StartVirtual\s*)=.*','$1=1' -replace '^(vDeleteSource\s*)=.*','$1=1' -replace '^(vAutoEditions\s*)=.*',"`$1=$($iso.virtualEdition)"
+    $convertConfig = $convertConfig `
+        -replace '^(StartVirtual\s*)=.*','$1=1' `
+        -replace '^(vDeleteSource\s*)=.*','$1=1' `
+        -replace '^(vAutoEditions\s*)=.*',"`$1=$($iso.virtualEdition)"
     }
     Set-Content -Encoding ascii -Path $buildDirectory/ConvertConfig.ini -Value $convertConfig
 
