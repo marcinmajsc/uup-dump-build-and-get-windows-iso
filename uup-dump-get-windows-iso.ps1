@@ -33,14 +33,6 @@ if ($windowsTargetName -match 'beta|dev|canary') {
     $ringLower = @('beta','dev','canary').Where({$windowsTargetName -match $_})[0]
 }
 
-if ($ringLower -eq 'dev') {
-    $ringLower = 'dev|wif'
-}
-
-if ($ringLower -eq 'beta') {
-    $ringLower = 'beta|wif'
-}
-
 function Get-EditionName($e) {
     switch ($e.ToLower()) {
         "core" { "Core" }
