@@ -121,7 +121,11 @@ function Get-UupDumpIso($name, $target) {
             $editions = $_.Value.editions.PSObject.Properties.Name
             $res = $true
             $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
-            if ($ringLower -and ($_.Value.info.ring -notmatch $ringLower)) {
+            $ringPattern = $ringLower
+            if ($ringLower -in @('dev','beta')) {
+                $ringPattern = "$ringLower|WIP"
+            }
+            if ($ringLower -and ($_.Value.info.ring -notmatch $ringPattern)) {
                 Write-Host "Skipping. Expected ring match for $ringLower. Got ring=$($_.Value.info.ring)."
                 $res = $false
             }
@@ -177,7 +181,7 @@ function Get-IsoWindowsImages($isoPath) {
 
 function Get-WindowsIso($name, $destinationDirectory) {
     $iso = Get-UupDumpIso $name $TARGETS.$name
-    if (-not $iso) { throw "Brak dopasowania UUP dla $name ($($TARGETS.$name.search)), lang=$lang." }
+    if (-not $iso) { throw "Can't find UUP for $name ($($TARGETS.$name.search)), lang=$lang." }
     $isoHasEdition  = $iso.PSObject.Properties.Name -contains 'edition' -and $iso.edition
     $hasVirtual     = $iso.PSObject.Properties.Name -contains 'virtualEdition' -and $iso.virtualEdition
     $effectiveEdition = if ($isoHasEdition) { $iso.edition } else { $TARGETS.$name.edition }
@@ -188,7 +192,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
         if ($parts.Count -lt 2) { throw "Unexpected title format, split resulted in less than 2 parts: $($parts -join '|')" }
         $verbuild = $parts[1] -split '[\s\(]' | Select-Object -First 1
     } else {
-        $verbuild = $ringLower
+        $verbuild = $ringLower.ToUpper()
     }
 
     $buildDirectory = "$destinationDirectory/$name"
