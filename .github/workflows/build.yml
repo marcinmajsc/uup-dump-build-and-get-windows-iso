@@ -132,22 +132,6 @@ jobs:
           pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
           echo "iso_name=$env:ISO_NAME" >> $env:GITHUB_OUTPUT
 
-      - name: Ensure 7-Zip (if missing)
-        shell: pwsh
-        run: |
-          $paths = @(
-            "$Env:ProgramFiles\7-Zip\7z.exe",
-            "$Env:ProgramFiles(x86)\7-Zip\7z.exe",
-            "C:\Program Files\7-Zip\7z.exe"
-          )
-          $exists = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $exists) {
-            Write-Host "7-Zip not found. Installing via Chocolatey..."
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            choco install 7zip -y --no-progress
-          }
-
       - name: Create multi-volume ZIP (2GB) with 7-Zip
         shell: pwsh
         run: |
@@ -174,8 +158,10 @@ jobs:
       - name: Build summary
         id: build_summary
         shell: pwsh
+        env:
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
         run: |
-          $iso = Get-Content (Resolve-Path C:/output/*.json) | ConvertFrom-Json
+          $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
           if ($imageNames.Count -gt 1) {
             if ($imageNames[0] -match '^(Windows (10|11))\s*(.*)') {
@@ -204,7 +190,7 @@ jobs:
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
-          | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip i wypakuj. |
+          | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip and extract. |
           | Extract (CLI) | `7z x $env:ISO_NAME.zip.001` |
           "@
 
