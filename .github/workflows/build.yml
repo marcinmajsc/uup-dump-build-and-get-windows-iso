@@ -135,7 +135,7 @@ jobs:
       - name: Create split zip
         shell: pwsh
         run: |
-          7z a -tzip -v2g "c:/output/$($env:ISO_NAME).zip" "$(($Get-Item -Path C:/output/*.ISO).FullName)"
+          7z a -tzip -mx=0 -v1900M -bsp1 "c:/output/$($env:ISO_NAME).zip" "$((Get-Item -Path C:/output/*.ISO).FullName)"
           Get-ChildItem "c:/output/$($env:ISO_NAME).zip.*" | Sort-Object Name | ForEach-Object { Write-Host "Created: $($_.FullName)" }
 
       - name: Upload artifact
@@ -171,18 +171,24 @@ jobs:
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '<br/>'
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ### Final file
           | Property | Value |
           | :--- | :--- |
           | Name | $finalImageName $($iso.version) |
           | Build | $($iso.build) |
           | Architecture | ${{ inputs.architecture }} |
           | Checksum | $($iso.checksum) |
-          | Files | $partsList |
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
+
+          ### Release files
+          | Property | Value |
+          | :--- | :--- |
+          | Release Files | $partsList |
           | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip and extract. |
           | Extract (CLI) | `7z x $env:ISO_NAME.zip.001` |
+          > Release is splitted because Github release limit filesize to 2G.
           "@
 
           (Get-Content $env:GITHUB_STEP_SUMMARY) | Set-Content summary.md
