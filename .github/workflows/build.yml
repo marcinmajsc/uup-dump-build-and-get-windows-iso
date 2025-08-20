@@ -168,7 +168,7 @@ jobs:
           }
 
           $parts = Get-ChildItem "C:/output/$($env:ISO_NAME).zip.0*" | Sort-Object Name
-          $partsList = ($parts | ForEach-Object { $_.Name }) -join '<br/>'
+          $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           ### Final file
