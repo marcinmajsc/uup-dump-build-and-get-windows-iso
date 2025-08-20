@@ -171,7 +171,7 @@ jobs:
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
-          ### Final file
+          ### FILE INFO:
           | Property | Value |
           | :--- | :--- |
           | Name | $finalImageName $($iso.version) |
@@ -181,17 +181,21 @@ jobs:
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
-
-          ### Release files
-          | Property | Value |
-          | :--- | :--- |
-          | Release Files | $partsList |
-          | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip and extract. |
-          | Extract (CLI) | `7z x $env:ISO_NAME.zip.001` |
-          > Release is splitted because Github release limit filesize to 2G.
           "@
 
-          (Get-Content $env:GITHUB_STEP_SUMMARY) | Set-Content summary.md
+          Add-Content $rlsnfo @"
+          
+          ## RELEASE INFO
+          > ### File is splitted because Github release limit filesize to 2G.
+          > ### You must download all files **$env:ISO_NAME.zip.xxx** *(where xxx is number of archive)*
+          > ### If You have all files you can extract files. 
+          > For example on windows with 7-Zip:
+          >> | :--- | :--- |
+          >> | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip and extract. |
+          >> | Extract (CLI) | `7z x $env:ISO_NAME.zip.001` |
+          "@
+
+          ((Get-Content $env:GITHUB_STEP_SUMMARY) + "<br/>" + (Get-Content $rlsnfo)) | Set-Content summary.md
           echo "build=$($iso.build)" >> $env:GITHUB_ENV
           echo "version=$($iso.version)" >> $env:GITHUB_ENV
           echo "name=$($iso.name)" >> $env:GITHUB_ENV
