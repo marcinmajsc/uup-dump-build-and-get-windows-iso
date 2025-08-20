@@ -209,6 +209,6 @@ jobs:
           name: "${{ env.images }} ${{ inputs.architecture}} ${{ env.version }} (${{ env.build }})"
           body_path: summary.md
           draft: false
-          prerelease: false
+          prerelease: ${{ !contains(fromJson('["Windows 10 22H2","Windows 11 23H2","Windows 11 24H2"]'), inputs.architecture) }}
           files: |
             C:/output/*.zip.0*
