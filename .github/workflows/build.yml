@@ -132,6 +132,37 @@ jobs:
           pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
           echo "iso_name=$env:ISO_NAME" >> $env:GITHUB_OUTPUT
 
+      - name: Ensure 7-Zip (if missing)
+        shell: pwsh
+        run: |
+          $paths = @(
+            "$Env:ProgramFiles\7-Zip\7z.exe",
+            "$Env:ProgramFiles(x86)\7-Zip\7z.exe",
+            "C:\Program Files\7-Zip\7z.exe"
+          )
+          $exists = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exists) {
+            Write-Host "7-Zip not found. Installing via Chocolatey..."
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            choco install 7zip -y --no-progress
+          }
+
+      - name: Create multi-volume ZIP (2GB) with 7-Zip
+        shell: pwsh
+        run: |
+          $iso = Get-Item -Path C:/output/*.ISO
+          $zipBase = "C:/output/$($env:ISO_NAME).zip"
+          $candidates = @(
+            "$Env:ProgramFiles\7-Zip\7z.exe",
+            "$Env:ProgramFiles(x86)\7-Zip\7z.exe",
+            "C:\Program Files\7-Zip\7z.exe"
+          )
+          $sevenZip = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $sevenZip) { throw "7-Zip not found. Ensure previous step installed it." }
+          & $sevenZip a -tzip -mx=9 -v2g "$zipBase" "$($iso.FullName)"
+          Get-ChildItem "$zipBase.*" | Sort-Object Name | ForEach-Object { Write-Host "Created: $($_.FullName)" }
+
       - name: Upload artifact
         id: upload_artifact
         uses: actions/upload-artifact@v4
@@ -143,10 +174,8 @@ jobs:
       - name: Build summary
         id: build_summary
         shell: pwsh
-        env:
-          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
         run: |
-          $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
+          $iso = Get-Content (Resolve-Path C:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
           if ($imageNames.Count -gt 1) {
             if ($imageNames[0] -match '^(Windows (10|11))\s*(.*)') {
@@ -161,6 +190,9 @@ jobs:
             $finalImageName = $imageNames
           }
 
+          $parts = Get-ChildItem "C:/output/$($env:ISO_NAME).zip.0*" | Sort-Object Name
+          $partsList = ($parts | ForEach-Object { $_.Name }) -join '<br/>'
+
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           | Property | Value |
           | :--- | :--- |
@@ -168,9 +200,12 @@ jobs:
           | Build | $($iso.build) |
           | Architecture | ${{ inputs.architecture }} |
           | Checksum | $($iso.checksum) |
+          | Files | $partsList |
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
+          | Extract (GUI) | Open **$env:ISO_NAME.zip.001** in 7-Zip i wypakuj. |
+          | Extract (CLI) | `7z x $env:ISO_NAME.zip.001` |
           "@
 
           (Get-Content $env:GITHUB_STEP_SUMMARY) | Set-Content summary.md
@@ -182,7 +217,6 @@ jobs:
           echo "tagname=$($iso.build).$($iso.version).${{ fromJSON('{"Pro":"PRO","Home":"HOME","Multi":"MULTI"}')[inputs.edition] }}.${{ fromJSON('{"x64":"X64","arm64":"ARM64"}')[inputs.architecture] }}.${{ fromJSON('{"ar-sa":"AR","bg-bg":"BG","cs-cz":"CS","da-dk":"DA","de-de":"DE","el-gr":"EL","en-gb":"EN","en-us":"EN","es-es":"ES","es-mx":"ES","et-ee":"ET","fi-fi":"FI","fr-ca":"FR","fr-fr":"FR","he-il":"HE","hr-hr":"HR","hu-hu":"HU","it-it":"IT","ja-jp":"JA","ko-kr":"KO","lt-lt":"LT","lv-lv":"LV","nb-no":"NB","nl-nl":"NL","pl-pl":"PL","pt-br":"PT","pt-pt":"PT","ro-ro":"RO","ru-ru":"RU","sk-sk":"SK","sl-si":"SL","sr-latn-rs":"SR","sv-se":"SV","th-th":"TH","tr-tr":"TR","uk-ua":"UK","zh-cn":"ZH","zh-tw":"ZH"}')[inputs.language] }}$($iso.tags)" >> $env:GITHUB_ENV
 
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -192,3 +226,5 @@ jobs:
           body_path: summary.md
           draft: false
           prerelease: false
+          files: |
+            C:/output/*.zip.0*
