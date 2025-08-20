@@ -132,20 +132,11 @@ jobs:
           pwsh uup-dump-get-windows-iso.ps1 ${{ (inputs.versions) == 'Windows 10 22H2' && ' windows-10 ' || (inputs.versions) == 'Windows 11 23H2' && ' windows-11old ' || (inputs.versions) == 'Windows 11 24H2' && ' windows-11 ' || (inputs.versions) == 'Windows 11 24H2 BETA' && ' windows-11beta ' || (inputs.versions) == 'Windows 11 25H2 DEV' && ' windows-11dev ' || (inputs.versions) == 'Windows 11 Canary' && ' windows-11canary ' }} c:/output -architecture ${{ inputs.architecture }} -edition ${{ inputs.edition }} -lang ${{ inputs.language }} ${{ env.options }}
           echo "iso_name=$env:ISO_NAME" >> $env:GITHUB_OUTPUT
 
-      - name: Create multi-volume ZIP (2GB) with 7-Zip
+      - name: Create split zip
         shell: pwsh
         run: |
-          $iso = Get-Item -Path C:/output/*.ISO
-          $zipBase = "C:/output/$($env:ISO_NAME).zip"
-          $candidates = @(
-            "$Env:ProgramFiles\7-Zip\7z.exe",
-            "$Env:ProgramFiles(x86)\7-Zip\7z.exe",
-            "C:\Program Files\7-Zip\7z.exe"
-          )
-          $sevenZip = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $sevenZip) { throw "7-Zip not found. Ensure previous step installed it." }
-          & $sevenZip a -tzip -mx=9 -v2g "$zipBase" "$($iso.FullName)"
-          Get-ChildItem "$zipBase.*" | Sort-Object Name | ForEach-Object { Write-Host "Created: $($_.FullName)" }
+          7z a -tzip -v2g "c:/output/$($env:ISO_NAME).zip" "$(($Get-Item -Path C:/output/*.ISO).FullName)"
+          Get-ChildItem "c:/output/$($env:ISO_NAME).zip.*" | Sort-Object Name | ForEach-Object { Write-Host "Created: $($_.FullName)" }
 
       - name: Upload artifact
         id: upload_artifact
