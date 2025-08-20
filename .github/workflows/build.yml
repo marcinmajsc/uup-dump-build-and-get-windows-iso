@@ -183,7 +183,7 @@ jobs:
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
           "@
 
-          Add-Content $rlsnfo @"
+          $rlsnfo = @"
           
           ## RELEASE INFO
           > File is splitted because Github release limit filesize to 2G.
@@ -195,7 +195,7 @@ jobs:
           >> - Extract (CLI): `7z x $env:ISO_NAME.zip.001`
           "@
 
-          ((Get-Content $env:GITHUB_STEP_SUMMARY) + "<br/>" + (Get-Content $rlsnfo)) | Set-Content summary.md
+          ((Get-Content $env:GITHUB_STEP_SUMMARY) + "<br/>" + $rlsnfo) | Set-Content summary.md
           echo "build=$($iso.build)" >> $env:GITHUB_ENV
           echo "version=$($iso.version)" >> $env:GITHUB_ENV
           echo "name=$($iso.name)" >> $env:GITHUB_ENV
