@@ -135,7 +135,7 @@ jobs:
       - name: Create split zip
         shell: pwsh
         run: |
-          7z a -tzip -mx=0 -v1900M -bsp1 "c:/output/$($env:ISO_NAME).zip" "$((Get-Item -Path C:/output/*.ISO).FullName)"
+          7z a -tzip -mx=0 -v1950M -bsp2 "c:/output/$($env:ISO_NAME).zip" "$((Get-Item -Path C:/output/*.ISO).FullName)"
           Get-ChildItem "c:/output/$($env:ISO_NAME).zip.*" | Sort-Object Name | ForEach-Object { Write-Host "Created: $($_.FullName)" }
 
       - name: Upload artifact
