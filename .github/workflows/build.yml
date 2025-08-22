@@ -198,14 +198,14 @@ jobs:
           path: c:/output/*.ISO
           if-no-files-found: error
 
-      - name: Upload DISM Driver log artifact
-        if: ${{ inputs.drivers }}
-        id: upload_dism_driver_log_artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: DrvWinPE.log
-          path: c:/Windows/Logs/DISM/DrvWinPE.log
-          if-no-files-found: ignore
+      # - name: Upload DISM Driver log artifact
+      #   if: ${{ inputs.drivers }}
+      #   id: upload_dism_driver_log_artifact
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: DrvWinPE.log
+      #     path: c:/Windows/Logs/DISM/DrvWinPE.log
+      #     if-no-files-found: ignore
 
       - name: Build summary
         id: build_summary
@@ -231,6 +231,12 @@ jobs:
           $parts = Get-ChildItem "C:/output/$($env:ISO_NAME).zip.0*" | Sort-Object Name
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
+          $opts = '${{ steps.map.outputs.options }}'
+          $optsRow = ""
+          if ($opts) {
+            $optsFormatted = ($opts -split ' ') | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } -join ''
+            $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           ### FILE INFO:
           | Property | Value |
@@ -238,7 +244,13 @@ jobs:
           | Name | $finalImageName $($iso.version) |
           | Build | $($iso.build) |
           | Architecture | ${{ inputs.architecture }} |
-          $(if ($opts) { "| Build config | <ul>" + (($opts -split ' ') | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } -join '') + "</ul> |" })
+          "@
+
+          if ($optsRow) {
+            Add-Content $env:GITHUB_STEP_SUMMARY $optsRow
+          }
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
           | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
@@ -248,13 +260,13 @@ jobs:
           $rlsnfo = @"
           
           ## RELEASE INFO
-          > File is splitted because Github release limit filesize to 2G.
-          > You must download all files **$env:ISO_NAME.zip.xxx** *(where xxx is number of archive)*
-          > If You have all files you can extract files. 
-          >
-          > For example on windows with 7-Zip:
-          >> - Extract (GUI): `Open **$env:ISO_NAME.zip.001** in 7-Zip and extract.`
-          >> - Extract (CLI): `7z x $env:ISO_NAME.zip.001`
+          File is splitted because Github release limit filesize to 2G.
+          You must download all files **$env:ISO_NAME.zip.xxx** *(where xxx is number of archive)*
+          If You have all files you can extract files. 
+          
+          For example on windows with 7-Zip:
+          - Extract (GUI): `Open **$env:ISO_NAME.zip.001** in 7-Zip and extract.`
+          - Extract (CLI): `7z x $env:ISO_NAME.zip.001`
           "@
 
           ((Get-Content $env:GITHUB_STEP_SUMMARY) + "<br/>" + $rlsnfo) | Set-Content summary.md
