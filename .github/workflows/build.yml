@@ -234,10 +234,16 @@ jobs:
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
           $opts = '${{ steps.map.outputs.options }}'
-          $optsRow = ""
+
+          # Build config row only when there are any options
+          $optsRow = $null
           if (-not [string]::IsNullOrWhiteSpace($opts)) {
-            $optsFormatted = ($opts -split ' ') | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } -join ''
-            $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+            # split by whitespace, drop empties, strip leading dashes for display
+            $items = $opts -split '\s+' | Where-Object { $_ -and $_.Trim() -ne '' }
+            if ($items.Count -gt 0) {
+              $optsFormatted = -join ( $items | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } )
+              $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+            }
           }
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
