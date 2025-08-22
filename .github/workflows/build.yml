@@ -34,7 +34,7 @@ on:
           - Windows 11 24H2
           - Windows 11 24H2 BETA
           - Windows 11 25H2 DEV
-          - Windows 11 Canary
+          - Windows 11 CANARY
         default: Windows 11 24H2
         required: true
       edition:
@@ -161,7 +161,7 @@ jobs:
             'Windows 11 24H2'      = 'windows-11'
             'Windows 11 24H2 BETA' = 'windows-11beta'
             'Windows 11 25H2 DEV'  = 'windows-11dev'
-            'Windows 11 Canary'    = 'windows-11canary'
+            'Windows 11 CANARY'    = 'windows-11canary'
           }
 
           $langCode = $langMap['${{ inputs.language }}']
@@ -175,7 +175,9 @@ jobs:
 
           echo "lang=$langCode"    >> $env:GITHUB_OUTPUT
           echo "version=$verCode"  >> $env:GITHUB_OUTPUT
-          echo "options=$opts"     >> $env:GITHUB_OUTPUT
+          if ($opts) {
+            echo "options=$opts"   >> $env:GITHUB_OUTPUT
+          }
 
       - name: Build Windows
         id: build_windows
@@ -233,9 +235,10 @@ jobs:
 
           $opts = '${{ steps.map.outputs.options }}'
           $optsRow = ""
-          if ($opts) {
+          if (-not [string]::IsNullOrWhiteSpace($opts)) {
             $optsFormatted = ($opts -split ' ') | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } -join ''
             $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+          }
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           ### FILE INFO:
