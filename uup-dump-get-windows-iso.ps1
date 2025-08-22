@@ -96,14 +96,24 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-# --- aria2 heartbeat only (no content filtering except live-progress suppression) ---
-# Recognize common aria2 live-progress shapes (we suppress them) and emit "aria2: downloading…" every X seconds while active.
-$script:reAria2Live  = [regex]'^\[DL:[^\]]+\](?:\[[^\]]*\])+'     # [DL:..][#..]...
-$script:reAria2Live2 = [regex]'^\s*\[#?[0-9a-f]{6,}\s+[0-9A-Za-z./()%,:\s-]+\]\s*$' # "[#526375 0B/0B CN:1 DL:0B]"
+# --- aria2 heartbeat only (no content filtering) ---
+# Mute only *live progress* lines (including wrapped ones) and emit heartbeat.
+# Do NOT touch summaries or results; on failure we dump raw log tail.
 
-$script:Aria2Active        = $false
-$script:Aria2LastSeen      = [datetime]::MinValue
-$script:Aria2LastHeartbeat = [datetime]::MinValue
+# Patterns catching various live forms:
+$script:reAria2LiveA = [regex]'^\s*\[DL:[^\]]*$'                 # starts with [DL:... possibly wrapped (no closing ])
+$script:reAria2LiveB = [regex]'^\s*\[#?[0-9a-f]{3,}\s+.*$'        # "[#526375 0B/0B CN:1 DL:0B" (maybe no closing ])
+$script:reAria2LiveC = [regex]'\(\d{1,3}%\)'                      # "(53%)" tokens often present in live chunks
+$script:reAria2EndBr = [regex]'\]\s*$'                            # closing bracket at end of a wrapped line
+$script:reOnlySpaces = [regex]'^\s+$'
+
+# State for wrapped progress chunks
+$script:Aria2InWrapped = $false
+
+# Heartbeat state
+$script:Aria2Active          = $false
+$script:Aria2LastSeen        = [datetime]::MinValue
+$script:Aria2LastHeartbeat   = [datetime]::MinValue
 $script:Aria2HeartbeatEveryS = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
 $script:Aria2IdleCutoffS     = 15
 
@@ -116,6 +126,37 @@ function Aria2-MaybeHeartbeat {
     Write-CleanLine "aria2: downloading…"
     $script:Aria2LastHeartbeat = $now
   }
+}
+
+function Process-Aria2Heartbeat([string]$line) {
+  if ($null -eq $line) { return $false }
+
+  # If we are inside a wrapped progress block, suppress until a closing bracket appears
+  if ($script:Aria2InWrapped) {
+    Aria2-NoteActivity
+    if ($script:reAria2EndBr.IsMatch($line)) { $script:Aria2InWrapped = $false }
+    Aria2-MaybeHeartbeat
+    return $true
+  }
+
+  # New live-progress line (three heuristics):
+  if ($script:reAria2LiveA.IsMatch($line) -or $script:reAria2LiveB.IsMatch($line) -or ($script:reOnlySpaces.IsMatch($line) -and $script:Aria2Active)) {
+    $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)  # enter wrapped mode if no closing bracket
+    Aria2-NoteActivity
+    Aria2-MaybeHeartbeat
+    return $true
+  }
+
+  # Lines containing progress tokens like "(53%)" + DL/CN hints but not intended sections → treat as live too
+  if ( ($line -match 'DL:' -or $line -match 'CN:' -or $script:reAria2LiveC.IsMatch($line)) -and $line.TrimStart().StartsWith('[') ) {
+    $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)
+    Aria2-NoteActivity
+    Aria2-MaybeHeartbeat
+    return $true
+  }
+
+  # Not aria2 live → let caller print normally
+  return $false
 }
 
 function Process-Aria2Heartbeat([string]$line) {
@@ -389,7 +430,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
 
   if ($LASTEXITCODE) {
     Write-Host "::warning title=Build failed::Dumping last 300 raw log lines"
-    Get-Content $rawLog -Tail 300 | Write-Host
+    Get-Content $rawLog -Tail 1500 | Write-Host
     throw "uup_download_windows.cmd failed with exit code $LASTEXITCODE"
   }
 
