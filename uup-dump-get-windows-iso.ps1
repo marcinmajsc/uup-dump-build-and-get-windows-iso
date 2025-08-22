@@ -28,11 +28,19 @@ trap {
 
 # --- BEGIN: DISM/cmd + aria2 log filter (inline) ---
 # DISM/cmd: show progress buckets only (0,10,20,...,100), handle CR-based progress from .bat/cmd, strip ANSI.
-# aria2: hide live DL lines, print full "Download Progress Summary", and condense "Download Results"
-#        (print one-liner if all OK; otherwise print only non-OK rows).
+# aria2: hide live progress lines, print full "Download Progress Summary", and condense "Download Results"
+#        (one-liner if all OK; otherwise only non-OK rows). Emit a heartbeat every 10s while live is suppressed.
 
 # ---- Common helpers / regex ----
 $script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
+$script:LastPrintedLine = $null
+function Write-CleanLine([string]$text) {
+  $clean = $script:reAnsi.Replace(($text ?? ''), '')
+  # de-duplicate identical consecutive messages
+  if ($clean -eq $script:LastPrintedLine) { return }
+  $script:LastPrintedLine = $clean
+  Write-Host $clean
+}
 
 # ---- DISM progress ----
 $script:DismLastBucket = -1
@@ -75,13 +83,13 @@ function Emit-ProgressBucket([int]$pct) {
   $script:DismLastBucket = $bucket
 
   if ($script:DismNormalizeOutput) {
-    Write-Host ("[DISM] Progress: {0}%" -f $bucket)
+    Write-CleanLine ("[DISM] Progress: {0}%" -f $bucket)
   } else {
-    Write-Host ("Progress: {0}%" -f $bucket)
+    Write-CleanLine ("Progress: {0}%" -f $bucket)
   }
 
   if ($bucket -ge 100) {
-    Write-Host "[DISM] Progress: 100% (done)"
+    Write-CleanLine "[DISM] Progress: 100% (done)"
     # Prepare for next DISM phase (e.g., Mounting image)
     Reset-ProgressSession
   }
@@ -92,7 +100,7 @@ function Process-ProgressLine([string]$line) {
   $pct = Get-PercentFromText $line
   if ($pct -eq $null) { return $false }
 
-  # If percent goes backwards, assume a NEW DISM phase started (e.g., from 100% to 1%)
+  # If percent goes backwards, assume a NEW DISM phase started
   if ($script:DismLastBucket -ge 0 -and $pct -lt $script:DismLastBucket) {
     Reset-ProgressSession
   }
@@ -101,13 +109,16 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-# ---- aria2 filtering ----
+# ---- aria2 filtering & heartbeat ----
 # Live progress lines look like: [DL:48MiB][#498b74 10MiB/10MiB(100%)]...
 # Summary header: "*** Download Progress Summary as of ..."
 # Results block: "Download Results:" ... table lines "gid|STAT|...|path"
 $script:reAria2Live    = [regex]'^\[DL:[^\]]+\](?:\[[^\]]*\])+'   # multi [..][..]
+$script:reAria2Live2   = [regex]'^\s*\[#?[0-9a-f]{6,}\s+[0-9A-Za-z./()%,:\s-]+\]\s*$' # e.g. "[#526375 0B/0B CN:1 DL:0B]"
 $script:reAria2Summary = [regex]'\*\*\*\s+Download Progress Summary as of '
 $script:reAria2Results = [regex]'^\s*Download Results:\s*$'
+$script:reAria2Header  = [regex]'^\s*gid\s+\|stat\|avg speed\s+\|path/URI\s*$'
+$script:reAria2Sep     = [regex]'^\s*=+\+==+\+.*$'
 $script:reAria2Row     = [regex]'^\s*([0-9a-f]{6,})\|([A-Z]+)\|'
 
 $script:Aria2InSummary       = $false
@@ -117,37 +128,47 @@ $script:Aria2ResultsHasError = $false
 $script:Aria2ErrorCount      = 0
 $script:Aria2RowCount        = 0
 
+# Heartbeat state
+$script:Aria2Active          = $false
+$script:Aria2LastSeen        = [datetime]::MinValue
+$script:Aria2LastHeartbeat   = [datetime]::MinValue
+$script:Aria2HeartbeatEveryS = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
+$script:Aria2IdleCutoffS     = 15  # consider aria2 inactive if nothing seen for this long
+
+function Aria2-MaybeHeartbeat {
+  if (-not $script:Aria2Active) { return }
+  $now = Get-Date
+  if (($now - $script:Aria2LastSeen).TotalSeconds -gt $script:Aria2IdleCutoffS) {
+    # aria2 became idle
+    $script:Aria2Active = $false
+    return
+  }
+  if (($now - $script:Aria2LastHeartbeat).TotalSeconds -ge $script:Aria2HeartbeatEveryS) {
+    Write-CleanLine "aria2: downloading…"
+    $script:Aria2LastHeartbeat = $now
+  }
+}
+
 function Flush-Aria2ResultsBuffer {
   if ($script:Aria2ResultsBuffer.Count -eq 0) { return }
 
   if (-not $script:Aria2ResultsHasError) {
-    Write-Host "All downloads completed without any errors."
+    Write-CleanLine "All downloads completed without any errors."
   } else {
-    Write-Host ("Download Results (errors only): {0}/{1} items failed" -f $script:Aria2ErrorCount, $script:Aria2RowCount)
-    # Print header lines up to the table header, if present
-    $printedHeader = $false
+    Write-CleanLine ("Download Results (errors only): {0}/{1} items failed" -f $script:Aria2ErrorCount, $script:Aria2RowCount)
+    # Print compact table header
+    Write-CleanLine 'gid     |stat|avg speed |path/URI'
+    Write-CleanLine '========+====+==========+========================================================'
     foreach ($l in $script:Aria2ResultsBuffer) {
-      if ($l -match '^\s*gid\s+\|stat\|avg speed\s+\|path/URI\s*$' -or $l -match '^\s*=+\+==+\+.*\+.*$') {
-        if (-not $printedHeader) {
-          Write-Host 'gid     |stat|avg speed |path/URI'
-          Write-Host '========+====+==========+========================================================'
-          $printedHeader = $true
-        }
-        continue
-      }
       $m = $script:reAria2Row.Match($l)
       if ($m.Success) {
         $stat = $m.Groups[2].Value
-        if ($stat -ne 'OK') { Write-Host $l }
+        if ($stat -ne 'OK') { Write-CleanLine $l }
       }
-    }
-    if (-not $printedHeader -and $script:Aria2ErrorCount -gt 0) {
-      # In case header was not present in buffer, still print a separating line
-      Write-Host '------------------------------------------------------------------------'
     }
   }
 
-  # Reset state
+  # Reset results state (but keep aria2 activity for a moment; heartbeat will stop itself on idle)
   $script:Aria2ResultsBuffer.Clear() | Out-Null
   $script:Aria2InResults       = $false
   $script:Aria2ResultsHasError = $false
@@ -159,26 +180,38 @@ function Process-Aria2Line([string]$line) {
   if ($null -eq $line) { return $false }
   $txt = $line
 
-  # If currently inside Summary block:
+  # track activity for heartbeat
+  if ($script:reAria2Live.IsMatch($txt) -or $script:reAria2Live2.IsMatch($txt) -or
+      $script:reAria2Summary.IsMatch($txt) -or $script:reAria2Results.IsMatch($txt)) {
+    $script:Aria2Active = $true
+    $script:Aria2LastSeen = Get-Date
+  }
+
+  # Inside Summary block → print verbatim until a new section begins
   if ($script:Aria2InSummary) {
-    # Terminate summary when another section starts
-    if ($script:reAria2Results.IsMatch($txt) -or $script:reAria2Live.IsMatch($txt)) {
+    if ($script:reAria2Results.IsMatch($txt) -or $script:reAria2Live.IsMatch($txt) -or $script:reAria2Live2.IsMatch($txt)) {
       $script:Aria2InSummary = $false
-      # fallthrough to re-handle this line outside summary
+      # fallthrough
     } else {
-      Write-Host $txt
+      Write-CleanLine $txt
       return $true
     }
   }
 
-  # Hide live progress lines and whitespace-only spacer lines produced by CR updates
-  if ($script:reAria2Live.IsMatch($txt)) { return $true }
-  if ($txt -match '^\s+$' -and -not $script:Aria2InResults) { return $true }
+  # Hide live progress lines and whitespace-only spacer lines from CR updates
+  if ($script:reAria2Live.IsMatch($txt) -or $script:reAria2Live2.IsMatch($txt)) {
+    Aria2-MaybeHeartbeat
+    return $true
+  }
+  if ($txt -match '^\s+$' -and -not $script:Aria2InResults) {
+    Aria2-MaybeHeartbeat
+    return $true
+  }
 
   # Summary start → print verbatim until it ends
   if ($script:reAria2Summary.IsMatch($txt)) {
     $script:Aria2InSummary = $true
-    Write-Host $txt
+    Write-CleanLine $txt
     return $true
   }
 
@@ -193,6 +226,7 @@ function Process-Aria2Line([string]$line) {
   if ($script:Aria2InResults) {
     $null = $script:Aria2ResultsBuffer.Add($txt)
 
+    # Count rows & detect non-OK
     $m = $script:reAria2Row.Match($txt)
     if ($m.Success) {
       $script:Aria2RowCount++
@@ -203,8 +237,8 @@ function Process-Aria2Line([string]$line) {
       }
     }
 
-    # Heurystyka końca wyników: pusta linia lub pojawienie się nowej sekcji
-    if ($txt -match '^\s*$') {
+    # End of results block: blank line OR start of another section (summary header) OR next live line
+    if ($txt -match '^\s*$' -or $script:reAria2Summary.IsMatch($txt) -or $script:reAria2Live.IsMatch($txt) -or $script:reAria2Live2.IsMatch($txt)) {
       Flush-Aria2ResultsBuffer
     }
     return $true
@@ -213,7 +247,7 @@ function Process-Aria2Line([string]$line) {
   return $false
 }
 
-Write-Host "::notice title=Log filters::DISM in $script:DismEveryPercent% steps; aria2 live progress hidden; summary & condensed results shown."
+Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% steps; aria2 live progress hidden; summary & condensed results shown; heartbeat enabled."
 # --- END: DISM/cmd + aria2 log filter (inline) ---
 
 $arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
@@ -249,36 +283,36 @@ function New-QueryString([hashtable]$parameters) {
 function Invoke-UupDumpApi([string]$name, [hashtable]$body) {
   for ($n = 0; $n -lt 15; ++$n) {
     if ($n) {
-      Write-Host "Waiting a bit before retrying the uup-dump api ${name} request #$n"
+      Write-CleanLine "Waiting a bit before retrying the uup-dump api ${name} request #$n"
       Start-Sleep -Seconds 10
-      Write-Host "Retrying the uup-dump api ${name} request #$n"
+      Write-CleanLine "Retrying the uup-dump api ${name} request #$n"
     }
     try {
       $qs = if ($body) { '?' + (New-QueryString $body) } else { '' }
       return Invoke-RestMethod -Method Get -Uri ("https://api.uupdump.net/{0}.php{1}" -f $name, $qs)
     } catch {
-      Write-Host "WARN: failed the uup-dump api $name request: $_"
+      Write-CleanLine "WARN: failed the uup-dump api $name request: $_"
     }
   }
   throw "timeout making the uup-dump api $name request"
 }
 
 function Get-UupDumpIso($name, $target) {
-  Write-Host "Getting the $name metadata"
+  Write-CleanLine "Getting the $name metadata"
   $result = Invoke-UupDumpApi listid @{ search = $target.search }
 
   $result.response.builds.PSObject.Properties
   | ForEach-Object {
       $id = $_.Value.uuid
       $uupDumpUrl = 'https://uupdump.net/selectlang.php?' + (New-QueryString @{ id = $id })
-      Write-Host "Processing $name $id ($uupDumpUrl)"
+      Write-CleanLine "Processing $name $id ($uupDumpUrl)"
       $_
     }
   | Where-Object {
       if (!$preview) {
         $ok = ($target.search -like '*preview*') -or ($_.Value.title -notlike '*preview*')
         if (-not $ok) {
-          Write-Host "Skipping.
+          Write-CleanLine "Skipping.
 L1: Expected preview=false.
 L2: Got preview=true."
         }
@@ -288,7 +322,7 @@ L2: Got preview=true."
     }
   | ForEach-Object {
       $id = $_.Value.uuid
-      Write-Host "Getting the $name $id langs metadata"
+      Write-CleanLine "Getting the $name $id langs metadata"
       $result = Invoke-UupDumpApi listlangs @{ id = $id }
       if ($result.response.updateInfo.build -ne $_.Value.build) {
         throw 'for some reason listlangs returned an unexpected build'
@@ -297,11 +331,11 @@ L2: Got preview=true."
 
       $langs = $_.Value.langs.PSObject.Properties.Name
       $eds = if ($langs -contains $lang) {
-        Write-Host "Getting the $name $id editions metadata"
+        Write-CleanLine "Getting the $name $id editions metadata"
         $result = Invoke-UupDumpApi listeditions @{ id = $id; lang = $lang }
         $result.response.editionFancyNames
       } else {
-        Write-Host "Skipping.
+        Write-CleanLine "Skipping.
 L3: Expected langs=$lang.
 L4: Got langs=$($langs -join ',')."
         [PSCustomObject]@{}
@@ -319,31 +353,31 @@ L4: Got langs=$($langs -join ',')."
         $actual = ($_.Value.info.ring).ToUpper()
         if ($ringLower -in @('dev','beta')) {
           if ($actual -notin @($expectedRing, 'WIF', 'WIS')) {
-            Write-Host "Skipping.
+            Write-CleanLine "Skipping.
 L5: Expected ring match for $expectedRing, WIS or WIF. Got ring=$actual."
             $res = $false
           }
         } else {
           if ($actual -ne $expectedRing) {
-            Write-Host "Skipping. Expected ring match for $expectedRing. Got ring=$actual."
+            Write-CleanLine "Skipping. Expected ring match for $expectedRing. Got ring=$actual."
             $res = $false
           }
         }
       }
 
       if ($langs -notcontains $lang) {
-        Write-Host "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
+        Write-CleanLine "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
         $res = $false
       }
 
       if ((Get-EditionName $edition) -eq "Multi") {
         if (($editions -notcontains "Professional") -and ($editions -notcontains "Core")) {
-          Write-Host "Skipping.
+          Write-CleanLine "Skipping.
 L6: Expected editions=Multi (Professional/Core). Got editions=$($editions -join ',')."
           $res = $false
         }
       } elseif ($editions -notcontains (Get-EditionName $edition)) {
-        Write-Host ("Skipping. Expected editions={0}.
+        Write-CleanLine ("Skipping. Expected editions={0}.
 L7: Got editions={1}." -f (Get-EditionName $edition), ($editions -join ','))
         $res = $false
       }
@@ -369,19 +403,19 @@ L7: Got editions={1}." -f (Get-EditionName $edition), ($editions -join ','))
 
 function Get-IsoWindowsImages($isoPath) {
   $isoPath = Resolve-Path $isoPath
-  Write-Host "Mounting $isoPath"
+  Write-CleanLine "Mounting $isoPath"
   $isoImage = Mount-DiskImage $isoPath -PassThru
   try {
     $isoVolume = $isoImage | Get-Volume
     $installPath = if ($esd) { "$($isoVolume.DriveLetter):\sources\install.esd" } else { "$($isoVolume.DriveLetter):\sources\install.wim" }
-    Write-Host "Getting Windows images from $installPath"
+    Write-CleanLine "Getting Windows images from $installPath"
     Get-WindowsImage -ImagePath $installPath | ForEach-Object {
       $image = Get-WindowsImage -ImagePath $installPath -Index $_.ImageIndex
       [PSCustomObject]@{ index = $image.ImageIndex; name = $image.ImageName; version = $image.Version }
     }
   }
   finally {
-    Write-Host "Dismounting $isoPath"
+    Write-CleanLine "Dismounting $isoPath"
     Dismount-DiskImage $isoPath | Out-Null
   }
 }
@@ -421,10 +455,10 @@ function Get-WindowsIso($name, $destinationDirectory) {
   New-Item -ItemType Directory -Force $buildDirectory | Out-Null
 
   $edn = if ($hasVirtual) { $iso.virtualEdition } else { $effectiveEdition }
-  Write-Host $edn
+  Write-CleanLine $edn
   $title = "$name $edn $($iso.build)"
 
-  Write-Host "Downloading the UUP dump download package for $title from $($iso.downloadPackageUrl)"
+  Write-CleanLine "Downloading the UUP dump download package for $title from $($iso.downloadPackageUrl)"
   $downloadPackageBody = if ($hasVirtual) {
     @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition }
   } else {
@@ -446,7 +480,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
   if ($drivers -and $arch -ne "arm64") {
     $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'
     $tag += ".D"
-    Write-Host "Copy Dell drivers to $buildDirectory directory"
+    Write-CleanLine "Copy Dell drivers to $buildDirectory directory"
     Copy-Item -Path Drivers -Destination $buildDirectory/Drivers -Recurse
   }
   if ($netfx3) {
@@ -461,10 +495,10 @@ function Get-WindowsIso($name, $destinationDirectory) {
   }
   Set-Content -Encoding ascii -Path $buildDirectory/ConvertConfig.ini -Value $convertConfig
 
-  Write-Host "Creating the $title iso file inside the $buildDirectory directory"
+  Write-CleanLine "Creating the $title iso file inside the $buildDirectory directory"
   Push-Location $buildDirectory
 
-  # --- Filtered execution: DISM progress buckets + aria2 filtering ---
+  # --- Filtered execution: DISM progress buckets + aria2 filtering & heartbeat ---
   powershell cmd /c uup_download_windows.cmd 2>&1 |
     ForEach-Object {
       $raw = [string]$_
@@ -473,7 +507,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
         foreach ($line in ($crChunk -split "`n")) {
           if ($line -eq $null) { continue }
 
-          # aria2 filter first (live progress hidden, summary printed, results condensed)
+          # aria2 filter first (live progress hidden, summary printed, results condensed, heartbeat)
           if (Process-Aria2Line $line) { continue }
 
           # DISM progress buckets
@@ -483,12 +517,14 @@ function Get-WindowsIso($name, $destinationDirectory) {
               Reset-ProgressSession
             }
             # Default passthrough
-            $clean = $script:reAnsi.Replace($line, '')
-            if ($clean -ne '') { Write-Host $clean } else { Write-Host '' }
+            if ($line -eq '') { Write-CleanLine '' } else { Write-CleanLine $line }
           }
         }
       }
     }
+
+  # Final flush (in case a results block ended without a blank line)
+  Flush-Aria2ResultsBuffer
 
   if ($LASTEXITCODE) {
     throw "uup_download_windows.cmd failed with exit code $LASTEXITCODE"
@@ -499,7 +535,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
   $sourceIsoPath = Resolve-Path $buildDirectory/*.iso
   $IsoName = Split-Path $sourceIsoPath -leaf
 
-  Write-Host "Getting the $sourceIsoPath checksum"
+  Write-CleanLine "Getting the $sourceIsoPath checksum"
   $isoChecksum = (Get-FileHash -Algorithm SHA256 $sourceIsoPath).Hash.ToLowerInvariant()
   Set-Content -Encoding ascii -NoNewline -Path $destinationIsoChecksumPath -Value $isoChecksum
 
@@ -522,11 +558,11 @@ function Get-WindowsIso($name, $destinationDirectory) {
     } | ConvertTo-Json -Depth 99) -replace '\\u0026','&'
   )
 
-  Write-Host "Moving the created $sourceIsoPath to $destinationDirectory/$IsoName"
+  Write-CleanLine "Moving the created $sourceIsoPath to $destinationDirectory/$IsoName"
   Move-Item -Force $sourceIsoPath "$destinationDirectory/$IsoName"
 
   Write-Output "ISO_NAME=$IsoName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-  Write-Host 'All Done.'
+  Write-CleanLine 'All Done.'
 }
 
 Get-WindowsIso $windowsTargetName $destinationDirectory
