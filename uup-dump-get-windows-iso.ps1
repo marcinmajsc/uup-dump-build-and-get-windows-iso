@@ -64,23 +64,40 @@ function Get-PercentFromText([string]$text) {
   return $null
 }
 
+function Reset-ProgressSession {
+  $script:DismLastBucket = -1
+}
+
 function Emit-ProgressBucket([int]$pct) {
   $bucket = [int]([math]::Floor($pct / $script:DismEveryPercent) * $script:DismEveryPercent)
   if ($bucket -le $script:DismLastBucket) { return $false }
   $script:DismLastBucket = $bucket
+
   if ($script:DismNormalizeOutput) {
     Write-Host ("[DISM] Progress: {0}%" -f $bucket)
   } else {
     Write-Host ("Progress: {0}%" -f $bucket)
   }
-  if ($bucket -ge 100) { Write-Host "[DISM] Progress: 100% (done)" }
+
+  if ($bucket -ge 100) {
+    Write-Host "[DISM] Progress: 100% (done)"
+    # Important: prepare for the next DISM phase (e.g., Mounting image)
+    Reset-ProgressSession
+  }
   return $true
 }
 
 function Process-ProgressLine([string]$line) {
   $pct = Get-PercentFromText $line
-  if ($pct -ne $null) { [void](Emit-ProgressBucket $pct); return $true }
-  return $false
+  if ($pct -eq $null) { return $false }
+
+  # If percent goes backwards, assume a NEW DISM phase started (e.g., from 100% to 1%)
+  if ($script:DismLastBucket -ge 0 -and $pct -lt $script:DismLastBucket) {
+    Reset-ProgressSession
+  }
+
+  [void](Emit-ProgressBucket $pct)
+  return $true
 }
 
 Write-Host "::notice title=DISM/cmd log filter::Showing progress in $script:DismEveryPercent% steps"
