@@ -26,21 +26,22 @@ trap {
   Exit 1
 }
 
-# --- BEGIN: DISM/cmd progress filter (inline) ---
-# Shows progress only in buckets (0,10,20,...,100), hides spammy lines like:
-#  - "Archiving file data: ... (53%) done"
-#  - "[===    6.0%    ]"
-# Supports CR-based progress from .bat/cmd (split on `\r`). Strips ANSI.
+# --- BEGIN: DISM/cmd + aria2 log filter (inline) ---
+# DISM/cmd: show progress buckets only (0,10,20,...,100), handle CR-based progress from .bat/cmd, strip ANSI.
+# aria2: hide live DL lines, print full "Download Progress Summary", and condense "Download Results"
+#        (print one-liner if all OK; otherwise print only non-OK rows).
 
+# ---- Common helpers / regex ----
+$script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
+
+# ---- DISM progress ----
 $script:DismLastBucket = -1
 $script:DismEveryPercent = if ($env:DISM_PROGRESS_STEP) { [int]$env:DISM_PROGRESS_STEP } else { 10 }
 $script:DismNormalizeOutput = if ($env:DISM_PROGRESS_RAW -eq '1') { $false } else { $true }
 
-# Regexes
 $script:reArchiving = [regex]'Archiving file data:\s+.*?\((\d+)%\)\s+done'
 $script:reBracket   = [regex]'\[\s*[= \-]*\s*(\d+(?:[.,]\d+)?)%\s*[= \-]*\s*\]'
 $script:reLoosePct  = [regex]'(^|\s)(\d{1,3})(?:[.,]\d+)?%(\s|$)'
-$script:reAnsi      = [regex]'\x1B\[[0-9;]*[A-Za-z]'
 
 function Get-PercentFromText([string]$text) {
   if ([string]::IsNullOrEmpty($text)) { return $null }
@@ -81,7 +82,7 @@ function Emit-ProgressBucket([int]$pct) {
 
   if ($bucket -ge 100) {
     Write-Host "[DISM] Progress: 100% (done)"
-    # Important: prepare for the next DISM phase (e.g., Mounting image)
+    # Prepare for next DISM phase (e.g., Mounting image)
     Reset-ProgressSession
   }
   return $true
@@ -100,8 +101,120 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-Write-Host "::notice title=DISM/cmd log filter::Showing progress in $script:DismEveryPercent% steps"
-# --- END: DISM/cmd progress filter (inline) ---
+# ---- aria2 filtering ----
+# Live progress lines look like: [DL:48MiB][#498b74 10MiB/10MiB(100%)]...
+# Summary header: "*** Download Progress Summary as of ..."
+# Results block: "Download Results:" ... table lines "gid|STAT|...|path"
+$script:reAria2Live    = [regex]'^\[DL:[^\]]+\](?:\[[^\]]*\])+'   # multi [..][..]
+$script:reAria2Summary = [regex]'\*\*\*\s+Download Progress Summary as of '
+$script:reAria2Results = [regex]'^\s*Download Results:\s*$'
+$script:reAria2Row     = [regex]'^\s*([0-9a-f]{6,})\|([A-Z]+)\|'
+
+$script:Aria2InSummary       = $false
+$script:Aria2InResults       = $false
+$script:Aria2ResultsBuffer   = New-Object System.Collections.Generic.List[string]
+$script:Aria2ResultsHasError = $false
+$script:Aria2ErrorCount      = 0
+$script:Aria2RowCount        = 0
+
+function Flush-Aria2ResultsBuffer {
+  if ($script:Aria2ResultsBuffer.Count -eq 0) { return }
+
+  if (-not $script:Aria2ResultsHasError) {
+    Write-Host "All downloads completed without any errors."
+  } else {
+    Write-Host ("Download Results (errors only): {0}/{1} items failed" -f $script:Aria2ErrorCount, $script:Aria2RowCount)
+    # Print header lines up to the table header, if present
+    $printedHeader = $false
+    foreach ($l in $script:Aria2ResultsBuffer) {
+      if ($l -match '^\s*gid\s+\|stat\|avg speed\s+\|path/URI\s*$' -or $l -match '^\s*=+\+==+\+.*\+.*$') {
+        if (-not $printedHeader) {
+          Write-Host 'gid     |stat|avg speed |path/URI'
+          Write-Host '========+====+==========+========================================================'
+          $printedHeader = $true
+        }
+        continue
+      }
+      $m = $script:reAria2Row.Match($l)
+      if ($m.Success) {
+        $stat = $m.Groups[2].Value
+        if ($stat -ne 'OK') { Write-Host $l }
+      }
+    }
+    if (-not $printedHeader -and $script:Aria2ErrorCount -gt 0) {
+      # In case header was not present in buffer, still print a separating line
+      Write-Host '------------------------------------------------------------------------'
+    }
+  }
+
+  # Reset state
+  $script:Aria2ResultsBuffer.Clear() | Out-Null
+  $script:Aria2InResults       = $false
+  $script:Aria2ResultsHasError = $false
+  $script:Aria2ErrorCount      = 0
+  $script:Aria2RowCount        = 0
+}
+
+function Process-Aria2Line([string]$line) {
+  if ($null -eq $line) { return $false }
+  $txt = $line
+
+  # If currently inside Summary block:
+  if ($script:Aria2InSummary) {
+    # Terminate summary when another section starts
+    if ($script:reAria2Results.IsMatch($txt) -or $script:reAria2Live.IsMatch($txt)) {
+      $script:Aria2InSummary = $false
+      # fallthrough to re-handle this line outside summary
+    } else {
+      Write-Host $txt
+      return $true
+    }
+  }
+
+  # Hide live progress lines and whitespace-only spacer lines produced by CR updates
+  if ($script:reAria2Live.IsMatch($txt)) { return $true }
+  if ($txt -match '^\s+$' -and -not $script:Aria2InResults) { return $true }
+
+  # Summary start → print verbatim until it ends
+  if ($script:reAria2Summary.IsMatch($txt)) {
+    $script:Aria2InSummary = $true
+    Write-Host $txt
+    return $true
+  }
+
+  # Results block start → buffer until end
+  if ($script:reAria2Results.IsMatch($txt)) {
+    Flush-Aria2ResultsBuffer
+    $script:Aria2InResults = $true
+    $null = $script:Aria2ResultsBuffer.Add($txt)
+    return $true
+  }
+
+  if ($script:Aria2InResults) {
+    $null = $script:Aria2ResultsBuffer.Add($txt)
+
+    $m = $script:reAria2Row.Match($txt)
+    if ($m.Success) {
+      $script:Aria2RowCount++
+      $stat = $m.Groups[2].Value
+      if ($stat -ne 'OK') {
+        $script:Aria2ResultsHasError = $true
+        $script:Aria2ErrorCount++
+      }
+    }
+
+    # Heurystyka końca wyników: pusta linia lub pojawienie się nowej sekcji
+    if ($txt -match '^\s*$') {
+      Flush-Aria2ResultsBuffer
+    }
+    return $true
+  }
+
+  return $false
+}
+
+Write-Host "::notice title=Log filters::DISM in $script:DismEveryPercent% steps; aria2 live progress hidden; summary & condensed results shown."
+# --- END: DISM/cmd + aria2 log filter (inline) ---
 
 $arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
 
@@ -351,14 +464,25 @@ function Get-WindowsIso($name, $destinationDirectory) {
   Write-Host "Creating the $title iso file inside the $buildDirectory directory"
   Push-Location $buildDirectory
 
-  # --- Filtered execution: show progress only in buckets, pass other lines as-is ---
+  # --- Filtered execution: DISM progress buckets + aria2 filtering ---
   powershell cmd /c uup_download_windows.cmd 2>&1 |
     ForEach-Object {
       $raw = [string]$_
       if ([string]::IsNullOrEmpty($raw)) { return }
       foreach ($crChunk in ($raw -split "`r")) {
         foreach ($line in ($crChunk -split "`n")) {
+          if ($line -eq $null) { continue }
+
+          # aria2 filter first (live progress hidden, summary printed, results condensed)
+          if (Process-Aria2Line $line) { continue }
+
+          # DISM progress buckets
           if (-not (Process-ProgressLine $line)) {
+            # Heuristics: new DISM phase markers → reset
+            if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
+              Reset-ProgressSession
+            }
+            # Default passthrough
             $clean = $script:reAnsi.Replace($line, '')
             if ($clean -ne '') { Write-Host $clean } else { Write-Host '' }
           }
