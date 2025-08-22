@@ -26,10 +26,10 @@ trap {
   Exit 1
 }
 
-# --- BEGIN: DISM/cmd progress + lightweight aria2 heartbeat ---
+# --- BEGIN: DISM/cmd progress + aria2 heartbeat (live-progress mute only) ---
 # DISM: show only 0/10/20/.../100, reset between phases. Strip ANSI. 
-# aria2: DO NOT filter content; just suppress live-progress-like lines and emit a heartbeat every N seconds.
-# On failure we will dump raw log (tail) so nothing is lost.
+# aria2: mute ONLY live progress lines (including wrapped multi-bracket forms), emit heartbeat every N seconds.
+#        Do NOT filter summary/results content. On failure we dump raw tail.
 
 # Common helpers / regex
 $script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
@@ -97,38 +97,34 @@ function Process-ProgressLine([string]$line) {
 }
 
 # --- aria2 heartbeat only (no content filtering) ---
-# Mute only *live progress* lines (including wrapped ones) and emit heartbeat.
-# Do NOT touch summaries or results; on failure we dump raw log tail.
+# Mute only live progress lines (including wrapped/multi-bracket lines) and emit heartbeat every N seconds.
+# DO NOT touch summaries or results.
 
-# Patterns catching various live forms:
-$script:reAria2LiveA = [regex]'^\s*\[DL:[^\]]*$'                 # begins with [DL:... possibly wrapped (no closing ])
-$script:reAria2LiveB = [regex]'^\s*\[#?[0-9a-f]{3,}\s+.*$'        # "[#526375 0B/0B CN:1 DL:0B" (maybe no closing ])
-$script:reAria2LiveC = [regex]'\(\d{1,3}%\)'                      # "(53%)" tokens often present in live chunks
-$script:reAria2EndBr = [regex]'\]\s*$'                            # closing bracket at end of a wrapped line
-$script:reOnlySpaces = [regex]'^\s+$'
+# Catch common live forms:
+$script:reAriaMultiBrackets = [regex]'^\s*(?:\[[^\]]*\]){1,}\s*$'          # one or more [ ... ] groups on a single line
+$script:reAriaWrappedStart  = [regex]'^\s*\[(?:DL:|#)[^\]]*$'              # starts with [DL:... or [#... but no closing ]
+$script:reAriaHasTokens     = [regex]'\b(?:DL:|CN:|ETA:|[0-9]+(?:\.[0-9]+)?%|\(\d{1,3}%\))' # progress hints
+$script:reAriaEndBracket    = [regex]'\]\s*$'
+$script:reOnlySpaces        = [regex]'^\s+$'
+# legacy alias to avoid undefined variable in any older reference
+$script:reAria2Live = $script:reAriaMultiBrackets
 
-# (Legacy alias to avoid undefined variable if older references remain somewhere)
-$script:reAria2Live = [regex]'^\s*\[DL:[^\]]+\](?:\[[^\]]*\])+\s*$'
+# State
+$script:Aria2InWrapped        = $false
+$script:Aria2Active           = $false
+$script:Aria2LastSeen         = [datetime]::MinValue
+$script:Aria2LastHeartbeat    = [datetime]::MinValue
+$script:Aria2HeartbeatEveryS  = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
+$script:Aria2IdleCutoffS      = 15
 
-# State for wrapped progress chunks
-$script:Aria2InWrapped = $false
-
-# Heartbeat state
-$script:Aria2Active          = $false
-$script:Aria2LastSeen        = [datetime]::MinValue
-$script:Aria2LastHeartbeat   = [datetime]::MinValue
-$script:Aria2HeartbeatEveryS = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
-$script:Aria2IdleCutoffS     = 15
-
-function Aria2-NoteActivity { 
-  $script:Aria2Active = $true
+function Aria2-NoteActivity {
+  $script:Aria2Active   = $true
   $script:Aria2LastSeen = Get-Date
 }
-
 function Aria2-MaybeHeartbeat {
   if (-not $script:Aria2Active) { return }
   $now = Get-Date
-  if (($now - $script:Aria2LastSeen).TotalSeconds -gt $script:Aria2IdleCutoffS) { 
+  if (($now - $script:Aria2LastSeen).TotalSeconds -gt $script:Aria2IdleCutoffS) {
     $script:Aria2Active = $false
     return
   }
@@ -141,36 +137,43 @@ function Aria2-MaybeHeartbeat {
 function Process-Aria2Heartbeat([string]$line) {
   if ($null -eq $line) { return $false }
 
-  # Already inside a wrapped progress block → suppress until a closing bracket appears
+  # If we're already in a wrapped live block, keep suppressing until a closing bracket shows up
   if ($script:Aria2InWrapped) {
     Aria2-NoteActivity
-    if ($script:reAria2EndBr.IsMatch($line)) { $script:Aria2InWrapped = $false }
+    if ($script:reAriaEndBracket.IsMatch($line)) { $script:Aria2InWrapped = $false }
     Aria2-MaybeHeartbeat
     return $true
   }
 
-  # New live-progress line (three heuristics: DL-start, hash-start, or whitespace spacer while active)
-  if ($script:reAria2LiveA.IsMatch($line) -or $script:reAria2LiveB.IsMatch($line) -or ($script:reOnlySpaces.IsMatch($line) -and $script:Aria2Active)) {
-    $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)  # enter wrapped mode if no closing bracket
+  $trimStart = $line.TrimStart()
+
+  # Full single-line live like [DL:...][#...][#...]...
+  if ($script:reAriaMultiBrackets.IsMatch($line) -and $script:reAriaHasTokens.IsMatch($line)) {
     Aria2-NoteActivity
     Aria2-MaybeHeartbeat
     return $true
   }
 
-  # Lines with progress tokens like "(53%)" + DL/CN hints and starting with '[' → also treat as live
-  if ( ($line -match 'DL:' -or $line -match 'CN:' -or $script:reAria2LiveC.IsMatch($line)) -and $line.TrimStart().StartsWith('[') ) {
-    $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)
+  # Wrapped live start (no closing ]) or bracketed line with progress tokens at start
+  if ($script:reAriaWrappedStart.IsMatch($line) -or ($trimStart.StartsWith('[') -and $script:reAriaHasTokens.IsMatch($line))) {
+    $script:Aria2InWrapped = -not $script:reAriaEndBracket.IsMatch($line)
     Aria2-NoteActivity
     Aria2-MaybeHeartbeat
     return $true
   }
 
-  # Not aria2 live → let caller process normally
+  # Spacer lines during active live output
+  if ($script:Aria2Active -and $script:reOnlySpaces.IsMatch($line)) {
+    Aria2-MaybeHeartbeat
+    return $true
+  }
+
+  # Not aria2 live → let caller print it
   return $false
 }
 
 Write-CleanLine "::notice title=Log filters::DISM buckets $script:DismEveryPercent%; aria2 heartbeat every $script:Aria2HeartbeatEveryS s."
-# --- END: DISM/cmd progress + lightweight aria2 heartbeat ---
+# --- END: DISM/cmd progress + aria2 heartbeat ---
 
 $arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
 
@@ -405,7 +408,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
   # We capture RAW output to a file for debugging on failure.
   $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_aria2_raw.log"
 
-  # --- Filtered display: DISM buckets + aria2 heartbeat only ---
+  # --- Filtered display: aria2 heartbeat-only mute + DISM buckets ---
   & {
     powershell cmd /c uup_download_windows.cmd 2>&1 |
       Tee-Object -FilePath $rawLog |
@@ -416,7 +419,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
           foreach ($line in ($crChunk -split "`n")) {
             if ($line -eq $null) { continue }
 
-            # Suppress only live aria2 progress, but show heartbeat every N seconds
+            # aria2: mute only live progress (with heartbeat), show everything else
             if (Process-Aria2Heartbeat $line) { continue }
 
             # DISM progress buckets
@@ -433,7 +436,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
   }
 
   if ($LASTEXITCODE) {
-    Write-Host "::warning title=Build failed::Dumping last 300 raw log lines"
+    Write-Host "::warning title=Build failed::Dumping last 1500 raw log lines"
     Get-Content $rawLog -Tail 1500 | Write-Host
     throw "uup_download_windows.cmd failed with exit code $LASTEXITCODE"
   }
