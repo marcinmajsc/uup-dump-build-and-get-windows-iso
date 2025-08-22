@@ -101,11 +101,14 @@ function Process-ProgressLine([string]$line) {
 # Do NOT touch summaries or results; on failure we dump raw log tail.
 
 # Patterns catching various live forms:
-$script:reAria2LiveA = [regex]'^\s*\[DL:[^\]]*$'                 # starts with [DL:... possibly wrapped (no closing ])
+$script:reAria2LiveA = [regex]'^\s*\[DL:[^\]]*$'                 # begins with [DL:... possibly wrapped (no closing ])
 $script:reAria2LiveB = [regex]'^\s*\[#?[0-9a-f]{3,}\s+.*$'        # "[#526375 0B/0B CN:1 DL:0B" (maybe no closing ])
 $script:reAria2LiveC = [regex]'\(\d{1,3}%\)'                      # "(53%)" tokens often present in live chunks
 $script:reAria2EndBr = [regex]'\]\s*$'                            # closing bracket at end of a wrapped line
 $script:reOnlySpaces = [regex]'^\s+$'
+
+# (Legacy alias to avoid undefined variable if older references remain somewhere)
+$script:reAria2Live = [regex]'^\s*\[DL:[^\]]+\](?:\[[^\]]*\])+\s*$'
 
 # State for wrapped progress chunks
 $script:Aria2InWrapped = $false
@@ -117,11 +120,18 @@ $script:Aria2LastHeartbeat   = [datetime]::MinValue
 $script:Aria2HeartbeatEveryS = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
 $script:Aria2IdleCutoffS     = 15
 
-function Aria2-NoteActivity { $script:Aria2Active = $true; $script:Aria2LastSeen = Get-Date }
+function Aria2-NoteActivity { 
+  $script:Aria2Active = $true
+  $script:Aria2LastSeen = Get-Date
+}
+
 function Aria2-MaybeHeartbeat {
   if (-not $script:Aria2Active) { return }
   $now = Get-Date
-  if (($now - $script:Aria2LastSeen).TotalSeconds -gt $script:Aria2IdleCutoffS) { $script:Aria2Active = $false; return }
+  if (($now - $script:Aria2LastSeen).TotalSeconds -gt $script:Aria2IdleCutoffS) { 
+    $script:Aria2Active = $false
+    return
+  }
   if (($now - $script:Aria2LastHeartbeat).TotalSeconds -ge $script:Aria2HeartbeatEveryS) {
     Write-CleanLine "aria2: downloading…"
     $script:Aria2LastHeartbeat = $now
@@ -131,7 +141,7 @@ function Aria2-MaybeHeartbeat {
 function Process-Aria2Heartbeat([string]$line) {
   if ($null -eq $line) { return $false }
 
-  # If we are inside a wrapped progress block, suppress until a closing bracket appears
+  # Already inside a wrapped progress block → suppress until a closing bracket appears
   if ($script:Aria2InWrapped) {
     Aria2-NoteActivity
     if ($script:reAria2EndBr.IsMatch($line)) { $script:Aria2InWrapped = $false }
@@ -139,7 +149,7 @@ function Process-Aria2Heartbeat([string]$line) {
     return $true
   }
 
-  # New live-progress line (three heuristics):
+  # New live-progress line (three heuristics: DL-start, hash-start, or whitespace spacer while active)
   if ($script:reAria2LiveA.IsMatch($line) -or $script:reAria2LiveB.IsMatch($line) -or ($script:reOnlySpaces.IsMatch($line) -and $script:Aria2Active)) {
     $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)  # enter wrapped mode if no closing bracket
     Aria2-NoteActivity
@@ -147,7 +157,7 @@ function Process-Aria2Heartbeat([string]$line) {
     return $true
   }
 
-  # Lines containing progress tokens like "(53%)" + DL/CN hints but not intended sections → treat as live too
+  # Lines with progress tokens like "(53%)" + DL/CN hints and starting with '[' → also treat as live
   if ( ($line -match 'DL:' -or $line -match 'CN:' -or $script:reAria2LiveC.IsMatch($line)) -and $line.TrimStart().StartsWith('[') ) {
     $script:Aria2InWrapped = -not $script:reAria2EndBr.IsMatch($line)
     Aria2-NoteActivity
@@ -155,13 +165,7 @@ function Process-Aria2Heartbeat([string]$line) {
     return $true
   }
 
-  # Not aria2 live → let caller print normally
-  return $false
-}
-
-function Process-Aria2Heartbeat([string]$line) {
-  if ($line -match '^\s+$') { Aria2-MaybeHeartbeat; return $true }
-  if ($script:reAria2Live.IsMatch($line) -or $script:reAria2Live2.IsMatch($line)) { Aria2-NoteActivity; Aria2-MaybeHeartbeat; return $true }
+  # Not aria2 live → let caller process normally
   return $false
 }
 
