@@ -169,7 +169,9 @@ jobs:
 
           $opts = ''
           if ('${{ inputs.esd }}' -eq 'true')     { $opts += ' -esd' }
-          if ('${{ inputs.drivers }}' -eq 'true') { $opts += ' -drivers' }
+          if (('${{ inputs.drivers }}' -eq 'true') -and ('${{ inputs.architecture }}' -ne 'arm64')) {
+            $opts += ' -drivers'
+          }
           if ('${{ inputs.netfx3 }}' -eq 'true')  { $opts += ' -netfx3' }
           $opts = $opts.Trim()
 
