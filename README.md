@@ -29,21 +29,6 @@ Install the base [Windows 2022 box](https://github.com/rgl/windows-vagrant).
 
 Create the Windows ISO files using a vagrant managed VM:
 
-```bash
-./build.sh create-vm
-./build.sh create-iso windows-2022
-./build.sh create-iso windows-11
-./build.sh destroy-vm
-```
-
-When everything works correctly, you'll have the following files in the `output`
-directory, e.g., for the `windows-2022` ISO:
-
-* `windows-2022.iso`: the ISO file.
-* `windows-2022.iso.json`: the ISO metadata.
-* `windows-2022.iso.sha256.txt`: the ISO file SHA256 checksum.
-* `windows-2022.iso.log`: the ISO creation log.
-
 The ISO metadata is a JSON document alike:
 
 ```json
