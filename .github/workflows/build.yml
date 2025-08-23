@@ -211,11 +211,15 @@ jobs:
       #     path: c:/Windows/Logs/DISM/DrvWinPE.log
       #     if-no-files-found: ignore
 
+      - name: Set artifact_url
+        id: set_artifact_url
+        run: echo "artifact_url=${{ steps.upload_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
+
       - name: Build summary
         id: build_summary
         shell: pwsh
-        env:
-          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+      #  env:
+      #    ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
         run: |
           $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
@@ -275,7 +279,7 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
-          | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
+          | Iso | [$env:ISO_NAME]($env:artifact_url) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
           "@
 
