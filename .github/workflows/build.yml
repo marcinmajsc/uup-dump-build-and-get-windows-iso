@@ -169,7 +169,9 @@ jobs:
 
           $opts = ''
           if ('${{ inputs.esd }}' -eq 'true')     { $opts += ' -esd' }
-          if ('${{ inputs.drivers }}' -eq 'true') { $opts += ' -drivers' }
+          if (('${{ inputs.drivers }}' -eq 'true') -and ('${{ inputs.architecture }}' -ne 'arm64')) {
+            $opts += ' -drivers'
+          }
           if ('${{ inputs.netfx3 }}' -eq 'true')  { $opts += ' -netfx3' }
           $opts = $opts.Trim()
 
@@ -209,11 +211,16 @@ jobs:
       #     path: c:/Windows/Logs/DISM/DrvWinPE.log
       #     if-no-files-found: ignore
 
+      - name: Set artifact_url
+        id: set_artifact_url
+        shell: pwsh
+        run: echo "artifact_url=${{ steps.upload_iso_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
+
       - name: Build summary
         id: build_summary
         shell: pwsh
-        env:
-          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+      #  env:
+      #    ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
         run: |
           $iso = Get-Content (Resolve-Path c:/output/*.json) | ConvertFrom-Json
           $imageNames = $iso.images | ForEach-Object { $_.name }
@@ -233,11 +240,28 @@ jobs:
           $parts = Get-ChildItem "C:/output/$($env:ISO_NAME).zip.0*" | Sort-Object Name
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
+          # Build config row only when there are any options
           $opts = '${{ steps.map.outputs.options }}'
-          $optsRow = ""
+          $optsRow = $null
           if (-not [string]::IsNullOrWhiteSpace($opts)) {
-            $optsFormatted = ($opts -split ' ') | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } -join ''
-            $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+            # map short flags to full descriptions from workflow inputs
+            $descMap = @{
+              '-esd'     = 'Use ESD compression'
+              '-drivers' = 'Add additional drivers'
+              '-netfx3'  = 'Add .NET Framework 3.5'
+            }
+            # split -> normalize -> map -> deduplicate
+            $items = $opts -split '\s+' |
+              Where-Object { $_ -and $_.Trim() -ne '' } |
+              ForEach-Object {
+                $k = $_.ToLower()
+                if ($descMap.ContainsKey($k)) { $descMap[$k] } else { $_.TrimStart('-') }
+              } | Select-Object -Unique
+          
+            if ($items.Count -gt 0) {
+              $optsFormatted = ($items | ForEach-Object { "<li>$($_)</li>" }) -join ''
+              $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
+            }
           }
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
@@ -256,7 +280,7 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           | Checksum | $($iso.checksum) |
           | Image Name | $finalImageName |
-          | Iso | [$env:ISO_NAME]($env:ARTIFACT_URL) |
+          | Iso | [$env:ISO_NAME]($env:artifact_url) |
           | UUP dump | [$($iso.title)]($($iso.uupDump.downloadUrl)) |
           "@
 
