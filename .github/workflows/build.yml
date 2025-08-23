@@ -213,7 +213,8 @@ jobs:
 
       - name: Set artifact_url
         id: set_artifact_url
-        run: echo "artifact_url=${{ steps.upload_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
+        shell: pwsh
+        run: echo "artifact_url=${{ steps.upload_iso_artifact.outputs.artifact-url }}" >> $env:GITHUB_ENV
 
       - name: Build summary
         id: build_summary
