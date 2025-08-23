@@ -27,7 +27,7 @@ trap {
 }
 
 # ------------------------------
-# Log helpers + DISM bucketed progress (no aria2 log parsing)
+# Log helpers + DISM bucketed progress (no aria2 parsing)
 # ------------------------------
 $script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
 $script:LastPrintedLine = $null
@@ -93,7 +93,7 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 untouched by parser."
+Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 controlled by flags only."
 
 # ------------------------------
 # Basic metadata helpers
@@ -268,7 +268,7 @@ function Get-IsoWindowsImages($isoPath) {
 }
 
 # ------------------------------
-# Patch uup_download_windows.cmd with sed (variant A) + heartbeat while aria2c is running
+# Patch uup_download_windows.cmd with sed (variant A) — quiet aria2 flags
 # ------------------------------
 function Patch-Aria2-Flags {
   param([string]$CmdPath)
@@ -279,12 +279,12 @@ function Patch-Aria2-Flags {
     Write-CleanLine "Patching aria2 flags in $CmdPath using sed (variant A)."
     # Remove conflicting flags first
     & $sed.Path -ri 's/\s--console-log-level=\w+\b//g; s/\s--summary-interval=\d+\b//g; s/\s--download-result=\w+\b//g; s/\s--enable-color=\w+\b//g; s/\s-(q|quiet(=\w+)?)\b//g' $CmdPath
-    # Inject our quiet set right after "%aria2%"
+    # Inject quiet set right after "%aria2%"
     & $sed.Path -ri 's@("%aria2%"\s+)@\1--quiet=true --console-log-level=error --summary-interval=0 --download-result=hide --enable-color=false @g' $CmdPath
     return
   }
 
-  # Fallback: PowerShell regex (keeps UTF-16LE)
+  # Fallback: PowerShell regex (preserves UTF-16LE)
   Write-CleanLine "sed not found. Patching aria2 flags in $CmdPath using PowerShell fallback."
   $bytes   = [System.IO.File]::ReadAllBytes($CmdPath)
   $content = [System.Text.Encoding]::Unicode.GetString($bytes)
@@ -304,28 +304,6 @@ function Patch-Aria2-Flags {
 
   $newBytes = [System.Text.Encoding]::Unicode.GetBytes($content)
   [System.IO.File]::WriteAllBytes($CmdPath, $newBytes)
-}
-
-function Start-Aria2-Heartbeat {
-  # Prints heartbeat every 5 seconds while any aria2c.exe process is alive
-  $intervalMs = if ($env:ARIA2_HEARTBEAT_MS) { [int]$env:ARIA2_HEARTBEAT_MS } else { 5000 }
-  $script:__A2Timer  = New-Object System.Timers.Timer $intervalMs
-  $script:__A2Timer.AutoReset = $true
-  $script:__A2Evt = Register-ObjectEvent -InputObject $script:__A2Timer -EventName Elapsed -Action {
-    try {
-      if (Get-Process -Name "aria2c" -ErrorAction SilentlyContinue) {
-        Write-Host "aria2: downloading…"
-      }
-    } catch { }
-  } | Out-Null
-  $script:__A2Timer.Start()
-}
-
-function Stop-Aria2-Heartbeat {
-  try {
-    if ($script:__A2Timer) { $script:__A2Timer.Stop(); $script:__A2Timer.Dispose() }
-    if ($script:__A2Evt)   { Unregister-Event -SourceIdentifier $script:__A2Evt.Name -ErrorAction SilentlyContinue }
-  } catch { }
 }
 
 function Get-WindowsIso($name, $destinationDirectory) {
@@ -393,32 +371,25 @@ function Get-WindowsIso($name, $destinationDirectory) {
   # Raw log path
   $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_aria2_raw.log"
 
-  # Start heartbeat timer (fires only while aria2c.exe exists)
-  Start-Aria2-Heartbeat
-  try {
-    & {
-      powershell cmd /c uup_download_windows.cmd 2>&1 |
-        Tee-Object -FilePath $rawLog |
-        ForEach-Object {
-          $raw = [string]$_
-          if ([string]::IsNullOrEmpty($raw)) { return }
-          foreach ($crChunk in ($raw -split "`r")) {
-            foreach ($line in ($crChunk -split "`n")) {
-              if ($line -eq $null) { continue }
-              # DISM progress buckets; aria2 output is untouched by parser
-              if (-not (Process-ProgressLine $line)) {
-                if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
-                  Reset-ProgressSession
-                }
-                Write-CleanLine $line
+  & {
+    powershell cmd /c uup_download_windows.cmd 2>&1 |
+      Tee-Object -FilePath $rawLog |
+      ForEach-Object {
+        $raw = [string]$_
+        if ([string]::IsNullOrEmpty($raw)) { return }
+        foreach ($crChunk in ($raw -split "`r")) {
+          foreach ($line in ($crChunk -split "`n")) {
+            if ($line -eq $null) { continue }
+            # DISM progress buckets; aria2 is not parsed here
+            if (-not (Process-ProgressLine $line)) {
+              if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
+                Reset-ProgressSession
               }
+              Write-CleanLine $line
             }
           }
         }
-    }
-  }
-  finally {
-    Stop-Aria2-Heartbeat
+      }
   }
 
   if ($LASTEXITCODE) {
