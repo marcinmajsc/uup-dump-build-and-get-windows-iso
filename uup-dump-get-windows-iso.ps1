@@ -26,22 +26,19 @@ trap {
   Exit 1
 }
 
-# --- BEGIN: Log filters (DISM buckets + aria2 full mute with heartbeat) ---
-# DISM: show progress buckets (0,10,20,...,100), reset between phases; strip ANSI.
-# aria2: SUPPRESS ALL aria2 chatter (live/summary/results/status/separators/script-retrieval/phase banners).
-#        Only emit heartbeat every N seconds while active. Full raw log is saved and tailed on failure.
+# --- BEGIN: Log helpers + DISM bucketed progress (no aria2 filtering at all) ---
 
-# Common helpers / regex
+# Strip ANSI, simple de-dup to keep logs tidy (we do NOT touch aria2 output)
 $script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
 $script:LastPrintedLine = $null
 function Write-CleanLine([string]$text) {
   $clean = $script:reAnsi.Replace(($text ?? ''), '')
-  if ($clean -eq $script:LastPrintedLine) { return } # de-dup consecutive identical lines
+  if ($clean -eq $script:LastPrintedLine) { return }
   $script:LastPrintedLine = $clean
   Write-Host $clean
 }
 
-# --- DISM progress ---
+# DISM progress → show buckets 0/10/.../100 and reset between phases
 $script:DismLastBucket = -1
 $script:DismEveryPercent = if ($env:DISM_PROGRESS_STEP) { [int]$env:DISM_PROGRESS_STEP } else { 10 }
 $script:DismNormalizeOutput = if ($env:DISM_PROGRESS_RAW -eq '1') { $false } else { $true }
@@ -96,104 +93,8 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-# --- aria2: full mute (except heartbeat) ---
-# Heuristics for ANY aria2-originated lines: live, summary, results, status, headers, file lines, separators, OK legend,
-# "Retrieving aria2 script …", and phase banners like "Downloading Microsoft Store Apps..." / "Downloading the UUP set..."
-
-# Live and wrapped progress
-$script:reA2MultiBrackets   = [regex]'^\s*(?:\[[^\]]*\]){1,}\s*$'
-$script:reA2WrappedStart    = [regex]'^\s*\[(?:DL:|#)[^\]]*$'
-$script:reA2HasTokens       = [regex]'\b(?:DL:|CN:|ETA:|SUM:|OK\b|ERR\b|FINISHED|GID:|[0-9]+(?:\.[0-9]+)?%|\(\d{1,3}%\))'
-$script:reA2EndBracket      = [regex]'\]\s*$'
-$script:reA2OnlySpaces      = [regex]'^\s+$'
-
-# Blocks / legends / separators
-$script:reA2DownloadResults = [regex]'^\s*Download Results:\s*$'
-$script:reA2StatusLegend    = [regex]'^\s*Status Legend:\s*$'
-$script:reA2OkLegend        = [regex]'^\s*\(OK\):download completed\.\s*$'
-$script:reA2SummaryHeader   = [regex]'^\s*\*\*\*\s+Download Progress Summary as of '
-$script:reA2HeaderLine      = [regex]'^\s*gid\s+\|stat\|avg speed\s+\|path/URI\s*$'
-$script:reA2SepLinePlus     = [regex]'^\s*=+\+==+\+.*$'         # table separator with pluses
-$script:reA2PlainSep        = [regex]'^\s*[-=]{6,}\s*$'         # plain ----- or ===== lines
-$script:reA2TableRow        = [regex]'^\s*[0-9a-f]{3,}\|[A-Z]+'
-$script:reA2FileLine        = [regex]'^\s*FILE:\s+'
-$script:reA2ChecksumLine    = [regex]'^\s*\[Checksum:#?[0-9a-f]{3,}'
-
-# Script retrieval / phase banners
-$script:reA2RetrievingScript = [regex]'^\s*Retrieving aria2 script\b'
-$script:reA2PhaseDownloading = [regex]'^\s*Downloading (?:Microsoft Store Apps|the UUP set)\.\.\.$'
-
-# State & heartbeat
-$script:A2InWrapped         = $false
-$script:A2Active            = $false
-$script:A2LastSeen          = [datetime]::MinValue
-$script:A2LastHeartbeat     = [datetime]::MinValue
-$script:A2HeartbeatEveryS   = if ($env:ARIA2_HEARTBEAT_SEC) { [int]$env:ARIA2_HEARTBEAT_SEC } else { 10 }
-$script:A2IdleCutoffS       = 15
-
-function A2-NoteActivity { $script:A2Active = $true; $script:A2LastSeen = Get-Date }
-function A2-MaybeHeartbeat {
-  if (-not $script:A2Active) { return }
-  $now = Get-Date
-  if (($now - $script:A2LastSeen).TotalSeconds -gt $script:A2IdleCutoffS) { $script:A2Active = $false; return }
-  if (($now - $script:A2LastHeartbeat).TotalSeconds -ge $script:A2HeartbeatEveryS) {
-    Write-CleanLine "aria2: downloading…"
-    $script:A2LastHeartbeat = $now
-  }
-}
-
-function Process-Aria2Mute([string]$line) {
-  if ($null -eq $line) { return $false }
-  $ls = $line.TrimStart()
-
-  # Inside wrapped live chunk
-  if ($script:A2InWrapped) {
-    A2-NoteActivity
-    if ($script:reA2EndBracket.IsMatch($line)) { $script:A2InWrapped = $false }
-    A2-MaybeHeartbeat
-    return $true
-  }
-
-  # Live (single-line) or start wrapped, or bracketed line with tokens
-  if ( ($script:reA2MultiBrackets.IsMatch($line) -and $script:reA2HasTokens.IsMatch($line)) -or
-       $script:reA2WrappedStart.IsMatch($line) -or
-       ($ls.StartsWith('[') -and $script:reA2HasTokens.IsMatch($line)) ) {
-    $script:A2InWrapped = -not $script:reA2EndBracket.IsMatch($line)
-    A2-NoteActivity; A2-MaybeHeartbeat
-    return $true
-  }
-
-  # Spacer while aria2 active
-  if ($script:A2Active -and $script:reA2OnlySpaces.IsMatch($line)) { A2-MaybeHeartbeat; return $true }
-
-  # Any aria2 textual blocks / legends / separators / table / file / checksum
-  if ($script:reA2DownloadResults.IsMatch($line) -or
-      $script:reA2StatusLegend.IsMatch($line)  -or
-      $script:reA2OkLegend.IsMatch($line)      -or
-      $script:reA2SummaryHeader.IsMatch($line) -or
-      $script:reA2HeaderLine.IsMatch($line)    -or
-      $script:reA2SepLinePlus.IsMatch($line)   -or
-      $script:reA2PlainSep.IsMatch($line)      -or
-      $script:reA2TableRow.IsMatch($line)      -or
-      $script:reA2FileLine.IsMatch($line)      -or
-      $script:reA2ChecksumLine.IsMatch($line)  -or
-      $script:reA2RetrievingScript.IsMatch($line) -or
-      $script:reA2PhaseDownloading.IsMatch($line)) {
-    A2-NoteActivity; A2-MaybeHeartbeat
-    return $true
-  }
-
-  # Rare: tokens without brackets, try to mute if it smells like aria2 table
-  if ($script:reA2HasTokens.IsMatch($line) -and ($line -match 'gid\s*\||path/URI' -or $line -match '\|\s*[A-Z]{2,3}\s*\|')) {
-    A2-NoteActivity; A2-MaybeHeartbeat
-    return $true
-  }
-
-  return $false
-}
-
-Write-CleanLine "::notice title=Log filters::DISM buckets $script:DismEveryPercent%; aria2 muted (heartbeat every $script:A2HeartbeatEveryS s)."
-# --- END: Log filters ---
+Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 untouched (full output)."
+# --- END: helpers ---
 
 $arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
 
@@ -425,10 +326,9 @@ function Get-WindowsIso($name, $destinationDirectory) {
   Write-CleanLine "Creating the $title iso file inside the $buildDirectory directory"
   Push-Location $buildDirectory
 
-  # RAW output file for diagnostics on failure
-  $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_aria2_raw.log"
+  # Save RAW output for diagnostics on failure (we don't filter aria2 at all)
+  $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_raw.log"
 
-  # --- Filtered display: aria2 fully muted (heartbeat) + DISM buckets ---
   & {
     powershell cmd /c uup_download_windows.cmd 2>&1 |
       Tee-Object -FilePath $rawLog |
@@ -439,12 +339,8 @@ function Get-WindowsIso($name, $destinationDirectory) {
           foreach ($line in ($crChunk -split "`n")) {
             if ($line -eq $null) { continue }
 
-            # aria2: mute everything (show heartbeat only)
-            if (Process-Aria2Mute $line) { continue }
-
-            # DISM progress buckets
+            # DISM progress buckets (aria2 is untouched/passthrough)
             if (-not (Process-ProgressLine $line)) {
-              # new DISM phase markers → reset
               if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
                 Reset-ProgressSession
               }
