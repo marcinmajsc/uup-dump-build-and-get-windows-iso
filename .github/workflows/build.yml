@@ -233,15 +233,26 @@ jobs:
           $parts = Get-ChildItem "C:/output/$($env:ISO_NAME).zip.0*" | Sort-Object Name
           $partsList = ($parts | ForEach-Object { $_.Name }) -join '  <br/>'
 
-          $opts = '${{ steps.map.outputs.options }}'
-
           # Build config row only when there are any options
+          $opts = '${{ steps.map.outputs.options }}'
           $optsRow = $null
           if (-not [string]::IsNullOrWhiteSpace($opts)) {
-            # split by whitespace, drop empties, strip leading dashes for display
-            $items = $opts -split '\s+' | Where-Object { $_ -and $_.Trim() -ne '' }
+            # map short flags to full descriptions from workflow inputs
+            $descMap = @{
+              '-esd'     = 'Use ESD compression'
+              '-drivers' = 'Add additional drivers'
+              '-netfx3'  = 'Add .NET Framework 3.5'
+            }
+            # split -> normalize -> map -> deduplicate
+            $items = $opts -split '\s+' |
+              Where-Object { $_ -and $_.Trim() -ne '' } |
+              ForEach-Object {
+                $k = $_.ToLower()
+                if ($descMap.ContainsKey($k)) { $descMap[$k] } else { $_.TrimStart('-') }
+              } | Select-Object -Unique
+          
             if ($items.Count -gt 0) {
-              $optsFormatted = -join ( $items | ForEach-Object { "<li>$($_.TrimStart('-'))</li>" } )
+              $optsFormatted = ($items | ForEach-Object { "<li>$($_)</li>" }) -join ''
               $optsRow = "| Build config | <ul>$optsFormatted</ul> |"
             }
           }
