@@ -16,7 +16,7 @@ Set-StrictMode -Version Latest
 $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
 
-$preview = $false
+$preview  = $false
 $ringLower = $null
 
 trap {
@@ -26,9 +26,9 @@ trap {
   Exit 1
 }
 
-# --- BEGIN: Log helpers + DISM bucketed progress (no aria2 filtering at all) ---
-
-# Strip ANSI, simple de-dup to keep logs tidy (we do NOT touch aria2 output)
+# ------------------------------
+# Log helpers + DISM bucketed progress (no aria2 log parsing)
+# ------------------------------
 $script:reAnsi = [regex]'\x1B\[[0-9;]*[A-Za-z]'
 $script:LastPrintedLine = $null
 function Write-CleanLine([string]$text) {
@@ -38,7 +38,7 @@ function Write-CleanLine([string]$text) {
   Write-Host $clean
 }
 
-# DISM progress → show buckets 0/10/.../100 and reset between phases
+# DISM buckets (0/10/.../100)
 $script:DismLastBucket = -1
 $script:DismEveryPercent = if ($env:DISM_PROGRESS_STEP) { [int]$env:DISM_PROGRESS_STEP } else { 10 }
 $script:DismNormalizeOutput = if ($env:DISM_PROGRESS_RAW -eq '1') { $false } else { $true }
@@ -93,12 +93,13 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 untouched (full output)."
-# --- END: helpers ---
+Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 untouched by parser."
 
+# ------------------------------
+# Basic metadata helpers
+# ------------------------------
 $arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
 
-$ringLower = $null
 if ($windowsTargetName -match 'beta|dev|canary') {
   $preview = $true
   $ringLower = @('beta','dev','canary').Where({$windowsTargetName -match $_})[0]
@@ -114,12 +115,12 @@ function Get-EditionName($e) {
 }
 
 $TARGETS = @{
-  "windows-10"      = @{ search="windows 10 19045 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11old"   = @{ search="windows 11 22631 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11"      = @{ search="windows 11 26100 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11beta"  = @{ search="windows 11 26120 $arch"; edition=(Get-EditionName $edition); ring="Beta" }
-  "windows-11dev"   = @{ search="windows 11 26200 $arch"; edition=(Get-EditionName $edition); ring="Dev" }
-  "windows-11canary"= @{ search="windows 11 preview $arch"; edition=(Get-EditionName $edition); ring="Canary" }
+  "windows-10"       = @{ search="windows 10 19045 $arch"; edition=(Get-EditionName $edition) }
+  "windows-11old"    = @{ search="windows 11 22631 $arch"; edition=(Get-EditionName $edition) }
+  "windows-11"       = @{ search="windows 11 26100 $arch"; edition=(Get-EditionName $edition) }
+  "windows-11beta"   = @{ search="windows 11 26120 $arch"; edition=(Get-EditionName $edition); ring="Beta" }
+  "windows-11dev"    = @{ search="windows 11 26200 $arch"; edition=(Get-EditionName $edition); ring="Dev" }
+  "windows-11canary" = @{ search="windows 11 preview $arch"; edition=(Get-EditionName $edition); ring="Canary" }
 }
 
 function New-QueryString([hashtable]$parameters) {
@@ -266,14 +267,74 @@ function Get-IsoWindowsImages($isoPath) {
   }
 }
 
+# ------------------------------
+# Patch uup_download_windows.cmd with sed (variant A) + heartbeat while aria2c is running
+# ------------------------------
+function Patch-Aria2-Flags {
+  param([string]$CmdPath)
+  if (-not (Test-Path $CmdPath)) { return }
+
+  $sed = Get-Command sed -ErrorAction SilentlyContinue
+  if ($sed) {
+    Write-CleanLine "Patching aria2 flags in $CmdPath using sed (variant A)."
+    # Remove conflicting flags first
+    & $sed.Path -ri 's/\s--console-log-level=\w+\b//g; s/\s--summary-interval=\d+\b//g; s/\s--download-result=\w+\b//g; s/\s--enable-color=\w+\b//g; s/\s-(q|quiet(=\w+)?)\b//g' $CmdPath
+    # Inject our quiet set right after "%aria2%"
+    & $sed.Path -ri 's@("%aria2%"\s+)@\1--quiet=true --console-log-level=error --summary-interval=0 --download-result=hide --enable-color=false @g' $CmdPath
+    return
+  }
+
+  # Fallback: PowerShell regex (keeps UTF-16LE)
+  Write-CleanLine "sed not found. Patching aria2 flags in $CmdPath using PowerShell fallback."
+  $bytes   = [System.IO.File]::ReadAllBytes($CmdPath)
+  $content = [System.Text.Encoding]::Unicode.GetString($bytes)
+
+  $patternsToRemove = @(
+    '\s--console-log-level=\w+\b',
+    '\s--summary-interval=\d+\b',
+    '\s--download-result=\w+\b',
+    '\s--enable-color=\w+\b',
+    '\s-(?:q|quiet(?:=\w+)?)\b'
+  )
+  foreach ($re in $patternsToRemove) {
+    $content = [regex]::Replace($content, $re, '', 'IgnoreCase, CultureInvariant')
+  }
+  $inject = '--quiet=true --console-log-level=error --summary-interval=0 --download-result=hide --enable-color=false '
+  $content = [regex]::Replace($content, '("%aria2%"\s+)', ('$1' + $inject), 'IgnoreCase, CultureInvariant')
+
+  $newBytes = [System.Text.Encoding]::Unicode.GetBytes($content)
+  [System.IO.File]::WriteAllBytes($CmdPath, $newBytes)
+}
+
+function Start-Aria2-Heartbeat {
+  # Prints heartbeat every 5 seconds while any aria2c.exe process is alive
+  $intervalMs = if ($env:ARIA2_HEARTBEAT_MS) { [int]$env:ARIA2_HEARTBEAT_MS } else { 5000 }
+  $script:__A2Timer  = New-Object System.Timers.Timer $intervalMs
+  $script:__A2Timer.AutoReset = $true
+  $script:__A2Evt = Register-ObjectEvent -InputObject $script:__A2Timer -EventName Elapsed -Action {
+    try {
+      if (Get-Process -Name "aria2c" -ErrorAction SilentlyContinue) {
+        Write-Host "aria2: downloading…"
+      }
+    } catch { }
+  } | Out-Null
+  $script:__A2Timer.Start()
+}
+
+function Stop-Aria2-Heartbeat {
+  try {
+    if ($script:__A2Timer) { $script:__A2Timer.Stop(); $script:__A2Timer.Dispose() }
+    if ($script:__A2Evt)   { Unregister-Event -SourceIdentifier $script:__A2Evt.Name -ErrorAction SilentlyContinue }
+  } catch { }
+}
+
 function Get-WindowsIso($name, $destinationDirectory) {
   $iso = Get-UupDumpIso $name $TARGETS.$name
   if (-not $iso) { throw "Can't find UUP for $name ($($TARGETS.$name.search)), lang=$lang." }
 
-  $isoHasEdition = $iso.PSObject.Properties.Name -contains 'edition' -and $iso.edition
-  $hasVirtual    = $iso.PSObject.Properties.Name -contains 'virtualEdition' -and $iso.virtualEdition
+  $isoHasEdition    = $iso.PSObject.Properties.Name -contains 'edition' -and $iso.edition
+  $hasVirtualMember = $iso.PSObject.Properties.Name -contains 'virtualEdition' -and $iso.virtualEdition
   $effectiveEdition = if ($isoHasEdition) { $iso.edition } else { $TARGETS.$name.edition }
-  $hasVirtual       = $iso -and ($iso.PSObject.Properties.Name -contains 'virtualEdition') -and $iso.virtualEdition
 
   if (!$preview) {
     if (-not ($iso.title -match 'version')) { throw "Unexpected title format: missing 'version'" }
@@ -292,12 +353,12 @@ function Get-WindowsIso($name, $destinationDirectory) {
   if (Test-Path $buildDirectory) { Remove-Item -Force -Recurse $buildDirectory | Out-Null }
   New-Item -ItemType Directory -Force $buildDirectory | Out-Null
 
-  $edn = if ($hasVirtual) { $iso.virtualEdition } else { $effectiveEdition }
+  $edn = if ($hasVirtualMember) { $iso.virtualEdition } else { $effectiveEdition }
   Write-CleanLine $edn
   $title = "$name $edn $($iso.build)"
 
   Write-CleanLine "Downloading the UUP dump download package for $title from $($iso.downloadPackageUrl)"
-  $downloadPackageBody = if ($hasVirtual) { @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition } } else { @{ autodl=2; updates=1; cleanup=1 } }
+  $downloadPackageBody = if ($hasVirtualMember) { @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition } } else { @{ autodl=2; updates=1; cleanup=1 } }
   Invoke-WebRequest -Method Post -Uri $iso.downloadPackageUrl -Body $downloadPackageBody -OutFile "$buildDirectory.zip" | Out-Null
   Expand-Archive "$buildDirectory.zip" $buildDirectory
 
@@ -315,7 +376,7 @@ function Get-WindowsIso($name, $destinationDirectory) {
     Copy-Item -Path Drivers -Destination $buildDirectory/Drivers -Recurse
   }
   if ($netfx3) { $convertConfig = $convertConfig -replace '^(NetFx3\s*)=.*', '$1=1'; $tag += ".N" }
-  if ($hasVirtual) {
+  if ($hasVirtualMember) {
     $convertConfig = $convertConfig `
       -replace '^(StartVirtual\s*)=.*','$1=1' `
       -replace '^(vDeleteSource\s*)=.*','$1=1' `
@@ -326,29 +387,38 @@ function Get-WindowsIso($name, $destinationDirectory) {
   Write-CleanLine "Creating the $title iso file inside the $buildDirectory directory"
   Push-Location $buildDirectory
 
-  # Save RAW output for diagnostics on failure (we don't filter aria2 at all)
-  $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_raw.log"
+  # Patch aria2 flags in the batch before running it (sed variant A, with PS fallback)
+  Patch-Aria2-Flags -CmdPath (Join-Path $buildDirectory 'uup_download_windows.cmd')
 
-  & {
-    powershell cmd /c uup_download_windows.cmd 2>&1 |
-      Tee-Object -FilePath $rawLog |
-      ForEach-Object {
-        $raw = [string]$_
-        if ([string]::IsNullOrEmpty($raw)) { return }
-        foreach ($crChunk in ($raw -split "`r")) {
-          foreach ($line in ($crChunk -split "`n")) {
-            if ($line -eq $null) { continue }
+  # Raw log path
+  $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_aria2_raw.log"
 
-            # DISM progress buckets (aria2 is untouched/passthrough)
-            if (-not (Process-ProgressLine $line)) {
-              if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
-                Reset-ProgressSession
+  # Start heartbeat timer (fires only while aria2c.exe exists)
+  Start-Aria2-Heartbeat
+  try {
+    & {
+      powershell cmd /c uup_download_windows.cmd 2>&1 |
+        Tee-Object -FilePath $rawLog |
+        ForEach-Object {
+          $raw = [string]$_
+          if ([string]::IsNullOrEmpty($raw)) { return }
+          foreach ($crChunk in ($raw -split "`r")) {
+            foreach ($line in ($crChunk -split "`n")) {
+              if ($line -eq $null) { continue }
+              # DISM progress buckets; aria2 output is untouched by parser
+              if (-not (Process-ProgressLine $line)) {
+                if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
+                  Reset-ProgressSession
+                }
+                Write-CleanLine $line
               }
-              Write-CleanLine $line
             }
           }
         }
-      }
+    }
+  }
+  finally {
+    Stop-Aria2-Heartbeat
   }
 
   if ($LASTEXITCODE) {
