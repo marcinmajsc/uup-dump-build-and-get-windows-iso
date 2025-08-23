@@ -93,8 +93,6 @@ function Process-ProgressLine([string]$line) {
   return $true
 }
 
-Write-CleanLine "::notice title=Log filters::DISM in $script:DismEveryPercent% buckets; aria2 controlled by flags only."
-
 # ------------------------------
 # Basic metadata helpers
 # ------------------------------
