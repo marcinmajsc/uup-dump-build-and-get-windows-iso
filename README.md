@@ -6,7 +6,7 @@ This shrink wraps the [UUP dump](https://git.uupdump.net/uup-dump) project into 
 
 This can be executed in a Windows x64 or arm64 host (min. 21H2).
 
-This supports the following: 
+## This supports the following: 
 
 Windows Builds:
 * `windows-10`: Windows 10 19045 (aka 22H2)
