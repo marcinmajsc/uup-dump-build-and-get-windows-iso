@@ -6,8 +6,9 @@ This shrink wraps the [UUP dump](https://git.uupdump.net/uup-dump) project into 
 
 This can be executed in a Windows x64 or arm64 host (min. 21H2).
 
-This supports the following Windows Builds:
+This supports the following: 
 
+Windows Builds:
 * `windows-10`: Windows 10 19045 (aka 22H2)
 * `windows-11old`: Windows 11 22631 (aka 23H2)
 * `windows-11`: Windows 11 26100 (aka 24H2)
@@ -16,8 +17,16 @@ This supports the following Windows Builds:
 * `windows-11dev`: Windows 11 26220 (aka 25H2 DEV)
 * `windows-11canary`: Windows 11 Insider Preview (aka CANARY)
 
+Architecture:
+* `x64`
+* `arm64`
 
-This supports the following languages:
+Edition:
+* `Home`
+* `Pro`
+* `Multi`: Home + Pro
+
+Language:
 * `ar-sa`: Arabic (Saudi Arabia)
 * `bg-bg`: Bulgarian (Bulgaria)
 * `cs-cz`: Czech (Czech Republic)
@@ -57,12 +66,18 @@ This supports the following languages:
 * `zh-cn`: Chinese (Simplified, China)
 * `zh-tw`: Chinese (Traditional, Taiwan)
 
+Additional options:
+* `esd`: Compression with ESD
+* `drivers`: Add drivers from Drivers folder
+* `netfx3`: Add .NET Framework 3.5
+
+
 ## Usage
 
 Get the latest Windows Server 2022 iso:
 
 ```bash
-powershell uup-dump-get-windows-iso.ps1 windows-2022
+powershell uup-dump-get-windows-iso.ps1 windows-11 c:/output -architecture x64 -edition pro -lang en-us -esd -drivers -netfx3
 ```
 
 When everything works correctly, you'll have the iso in the `output` directory at, e.g., `output/windows-2022.iso`.
