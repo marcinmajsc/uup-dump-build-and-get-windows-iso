@@ -344,14 +344,16 @@ jobs:
           # Local files of parts still exist in C:\output → compute SHA256 per-part
           $localParts = Get-ChildItem "C:/output/${{ env.ISO_NAME }}.zip.0*" | Sort-Object Name
 
-          $outDir = Join-Path $env:GITHUB_WORKSPACE "dist"
+          # Prepare dist
+          $ws = $env:GITHUB_WORKSPACE
+          $outDir = Join-Path $ws "dist"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          # parts.txt
+          # 1) parts.txt
           $partsPath = Join-Path $outDir "parts.txt"
           [System.IO.File]::WriteAllLines($partsPath, $urls)
 
-          # parts.sha256 (format: "<hash><2 spaces><filename>")
+          # 2) parts.sha256 (format: "<hash><2 spaces><filename>")
           $partsShaPath = Join-Path $outDir "parts.sha256"
           $partShaLines = @()
           foreach ($p in $localParts) {
@@ -360,18 +362,26 @@ jobs:
           }
           Set-Content -Path $partsShaPath -Value $partShaLines -Encoding ASCII
 
-          # iso.sha256 for final assembled ISO
+          # 3) iso.sha256 for final assembled ISO
           $isoShaPath = Join-Path $outDir "iso.sha256"
           $expectedIsoHash = "${{ env.iso_checksum }}"
           Set-Content -Path $isoShaPath -Value "$expectedIsoHash  ${{ env.ISO_NAME }}" -Encoding ASCII
 
-          # Windows PowerShell downloader (downloads + verifies parts + merges + verifies ISO)
+          # 4) Copy bundled aria2 binaries from checked-out branch
+          $srcAria2 = Join-Path $ws "_aria2/aria2"
+          $dstAria2 = Join-Path $outDir "aria2-bin"
+          if (Test-Path $srcAria2) {
+            Copy-Item -Path (Join-Path $srcAria2 '*') -Destination $dstAria2 -Recurse -Force
+            Write-Host "Bundled aria2 binaries copied to $dstAria2"
+          } else {
+            Write-Warning "No bundled aria2 directory found at $srcAria2"
+          }
+
+          # 5) Windows PowerShell downloader (prefers bundled aria2c)
           $ps1 = @'
           param([string]$OutputDir = ".")
           $ErrorActionPreference = "Stop"
           function Fail($m){ Write-Error $m; exit 1 }
-
-          if (-not (Get-Command aria2c -ErrorAction SilentlyContinue)) { Fail "aria2c not found in PATH. Install aria2: https://aria2.github.io/" }
 
           $here = Split-Path -Parent $MyInvocation.MyCommand.Path
           $list = Join-Path $here "parts.txt"
@@ -381,17 +391,26 @@ jobs:
           if (-not (Test-Path $partsSha)){ Fail "parts.sha256 not found next to script." }
           if (-not (Test-Path $isoSha))  { Fail "iso.sha256 not found next to script." }
 
+          # Prefer bundled aria2c.exe if present
+          $bundled = Get-ChildItem -Path (Join-Path $here "aria2-bin") -Filter "aria2c.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($bundled) { $aria = $bundled.FullName } else {
+            $cmd = Get-Command aria2c -ErrorAction SilentlyContinue
+            if (-not $cmd) { Fail "aria2c not found. Use bundled (missing) or install: https://aria2.github.io/" }
+            $aria = $cmd.Path
+          }
+          Write-Host "Using aria2: $aria"
+
           Write-Host "Downloading split parts into: $OutputDir"
-          aria2c --input-file="$list" `
-                 --dir="$OutputDir" `
-                 --auto-file-renaming=false `
-                 --allow-overwrite=true `
-                 --continue=true `
-                 --max-concurrent-downloads=16 `
-                 --split=16 `
-                 --min-split-size=1M `
-                 --console-log-level=warn `
-                 --summary-interval=0
+          & $aria --input-file="$list" `
+                  --dir="$OutputDir" `
+                  --auto-file-renaming=false `
+                  --allow-overwrite=true `
+                  --continue=true `
+                  --max-concurrent-downloads=16 `
+                  --split=16 `
+                  --min-split-size=1M `
+                  --console-log-level=warn `
+                  --summary-interval=0
 
           # Verify parts SHA256
           $re = [regex]'^(?<hash>[0-9a-f]{64})\s{2}(?<name>.+)$'
@@ -418,10 +437,7 @@ jobs:
           Write-Host "Merging $($parts.Count) parts into $isoPath"
           $out = [System.IO.File]::Create($isoPath)
           try {
-            foreach ($p in $parts) {
-              $bytes = [System.IO.File]::ReadAllBytes($p.FullName)
-              $out.Write($bytes, 0, $bytes.Length)
-            }
+            foreach ($p in $parts) { $bytes = [System.IO.File]::ReadAllBytes($p.FullName); $out.Write($bytes, 0, $bytes.Length) }
           } finally { $out.Close() }
           Write-Host "ISO assembled: $isoPath"
 
@@ -437,7 +453,7 @@ jobs:
           $ps1Path = Join-Path $outDir "get-with-aria2.ps1"
           Set-Content -Path $ps1Path -Value $ps1 -Encoding UTF8
 
-          # Bash downloader (downloads + verifies parts + merges + verifies ISO)
+          # 6) Bash downloader (prefers bundled aria2c)
           $sh = @'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -449,19 +465,31 @@ jobs:
 
           die(){ echo "ERROR: $*" >&2; exit 1; }
 
-          command -v aria2c >/dev/null 2>&1 || die "aria2c not found in PATH. Install: https://aria2.github.io/"
+          # Prefer bundled aria2c if present
+          if [ -x "${SCRIPT_DIR}/aria2-bin/aria2c" ]; then
+            ARIA2="${SCRIPT_DIR}/aria2-bin/aria2c"
+          else
+            _found="$(command -v aria2c || true)"
+            if [ -n "${_found}" ]; then ARIA2="${_found}"; else
+              # Try any placed in subdirs under aria2-bin (e.g., win-x64/linux/macos)
+              candidate="$(find "${SCRIPT_DIR}/aria2-bin" -type f -name 'aria2c*' 2>/dev/null | head -n1 || true)"
+              [ -n "${candidate}" ] && ARIA2="${candidate}" || die "aria2c not found. Use bundled (missing) or install: https://aria2.github.io/"
+              chmod +x "${ARIA2}" || true
+            fi
+          fi
+          echo "Using aria2: ${ARIA2}"
 
           echo "Downloading split parts into: ${OUT_DIR}"
-          aria2c --input-file="${LIST_FILE}" \
-                 --dir="${OUT_DIR}" \
-                 --auto-file-renaming=false \
-                 --allow-overwrite=true \
-                 --continue=true \
-                 --max-concurrent-downloads=16 \
-                 --split=16 \
-                 --min-split-size=1M \
-                 --console-log-level=warn \
-                 --summary-interval=0
+          "${ARIA2}" --input-file="${LIST_FILE}" \
+                     --dir="${OUT_DIR}" \
+                     --auto-file-renaming=false \
+                     --allow-overwrite=true \
+                     --continue=true \
+                     --max-concurrent-downloads=16 \
+                     --split=16 \
+                     --min-split-size=1M \
+                     --console-log-level=warn \
+                     --summary-interval=0
 
           # Verify parts SHA256 (sha256sum or shasum -a 256)
           if command -v sha256sum >/dev/null 2>&1; then
@@ -488,20 +516,18 @@ jobs:
           else
             actual_hash="$(shasum -a 256 "${iso}" | awk '{print $1}')"
           fi
-          if [ "${actual_hash}" != "${expected_hash}" ]; then
-            die "ISO checksum mismatch. expected=${expected_hash} actual=${actual_hash}"
-          fi
+          [ "${actual_hash}" = "${expected_hash}" ] || die "ISO checksum mismatch. expected=${expected_hash} actual=${actual_hash}"
           echo "Final ISO SHA256 verified."
           '@
           $shPath = Join-Path $outDir "get-with-aria2.sh"
           Set-Content -Path $shPath -Value $sh -Encoding UTF8
           & bash -lc "chmod +x '$shPath'"
 
-          # ZIP package
+          # 7) ZIP package (now includes aria2 binaries)
           $zip = Join-Path $outDir "split-download-scripts.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path @($partsPath, $partsShaPath, $isoShaPath, $ps1Path, $shPath) -DestinationPath $zip -Force
-          Write-Host "Created $zip"
+          Compress-Archive -Path @($partsPath, $partsShaPath, $isoShaPath, $ps1Path, $shPath, (Join-Path $outDir "aria2-bin")) -DestinationPath $zip -Force
+          Write-Host "Created $zip (with bundled aria2 binaries)"
 
       - name: Upload ZIP to Release
         if: ${{ success() }}
