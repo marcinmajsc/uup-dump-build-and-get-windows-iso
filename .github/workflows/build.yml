@@ -331,6 +331,7 @@ jobs:
           $tag = "${{ env.tagname }}"
           if (-not $tag) { $tag = gh release view --json tagName -q '.tagName' }
           if (-not $tag) { throw "Cannot resolve release tag." }
+
           $owner,$repo = $env:GITHUB_REPOSITORY.Split('/')
 
           $assetNames = gh release view $tag --json assets -q '.assets[].name' | Where-Object { $_ -match '\.zip\.\d{3}$' }
@@ -339,202 +340,214 @@ jobs:
 
           $localParts = Get-ChildItem "C:/output/${{ env.ISO_NAME }}.zip.0*" | Sort-Object Name
 
-          $ws = $env:GITHUB_WORKSPACE
+          $ws   = $env:GITHUB_WORKSPACE
           $dist = Join-Path $ws "dist"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          $partsPath = Join-Path $dist "parts.txt"
-          [System.IO.File]::WriteAllLines($partsPath, $urls)
-
+          $partsPath    = Join-Path $dist "parts.txt"
           $partsShaPath = Join-Path $dist "parts.sha256"
+          $isoShaPath   = Join-Path $dist "iso.sha256"
+
+          [System.IO.File]::WriteAllLines($partsPath, $urls)
           $partShaLines = foreach ($p in $localParts) {
             $h = (Get-FileHash -Algorithm SHA256 $p.FullName).Hash.ToLowerInvariant()
             "$h  $($p.Name)"
           }
           Set-Content -Path $partsShaPath -Value $partShaLines -Encoding ASCII
+          Set-Content -Path $isoShaPath   -Value ("${{ env.iso_checksum }}  ${{ env.ISO_NAME }}") -Encoding ASCII
 
-          $isoShaPath = Join-Path $dist "iso.sha256"
-          $expectedIsoHash = "${{ env.iso_checksum }}"
-          Set-Content -Path $isoShaPath -Value "$expectedIsoHash  ${{ env.ISO_NAME }}" -Encoding ASCII
+          $srcAria2 = Join-Path $ws "aria2"
+          $src7z    = Join-Path $ws "7z"
 
-          function Get-Aria2-DirForPlatform {
-            param([string]$base,[string]$platform)
-            $cands = @()
+          function Pick-Aria2($platform) {
+            param([string]$platform)
+            if (-not (Test-Path $srcAria2)) { return @() }
             switch ($platform) {
-              'windows' { $cands = @('win','windows') }
-              'linux'   { $cands = @('linux') }
-              'macos'   { $cands = @('mac','osx','darwin','macos') }
+              'windows' {
+                $exe = Get-ChildItem -Path $srcAria2 -Recurse -Filter 'aria2c.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+                $dll = if ($exe) { Get-ChildItem -Path $exe.Directory -Filter '*.dll' -ErrorAction SilentlyContinue } else { @() }
+                return @($exe,$dll) | Where-Object { $_ }
+              }
+              'linux' {
+                return Get-ChildItem -Path $srcAria2 -Recurse -Filter 'aria2c' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
+              }
+              'macos' {
+                return Get-ChildItem -Path $srcAria2 -Recurse -Filter 'aria2c' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
+              }
             }
-            foreach ($c in $cands) {
-              $hit = Get-ChildItem -Path $base -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $c } | Select-Object -First 1
-              if ($hit) { return $hit.FullName }
-            }
-            return $null
           }
 
-          function Get-7z-BinForPlatform {
-            param([string]$base,[string]$platform)
-            if ($platform -eq 'windows') {
-              $exe = Get-ChildItem -Path $base -Recurse -Include '7z.exe','7zz.exe','7za.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($exe) { return $exe.Directory.FullName }
-            } else {
-              $nix = Get-ChildItem -Path $base -Recurse -Include '7z','7zz','7za','7zr' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
-              if ($nix) { return $nix.Directory.FullName }
+          function Pick-7z($platform) {
+            param([string]$platform)
+            if (-not (Test-Path $src7z)) { return @() }
+            switch ($platform) {
+              'windows' {
+                $exe = Get-ChildItem -Path $src7z -Recurse -Include '7z.exe','7zz.exe','7za.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+                $dll = if ($exe) { Get-ChildItem -Path $exe.Directory -Filter '*.dll' -ErrorAction SilentlyContinue } else { @() }
+                return @($exe,$dll) | Where-Object { $_ }
+              }
+              'linux' {
+                return Get-ChildItem -Path $src7z -Recurse -Include '7z','7zz','7za','7zr' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
+              }
+              'macos' {
+                return Get-ChildItem -Path $src7z -Recurse -Include '7z','7zz','7za','7zr' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
+              }
             }
-            return $null
           }
 
-          $srcAria2Root = Join-Path $ws "aria2"
-          $src7zRoot    = Join-Path $ws "7z"
+          function New-PS1-Windows($destDir) {
+            $lines = @(
+              'param([string]$OutputDir = ".")'
+              '$ErrorActionPreference = "Stop"'
+              'function Fail($m){ Write-Error $m; exit 1 }'
+              'function Resolve-SevenZip([string]$Base){'
+              '  $c = @('
+              '    (Get-ChildItem -Path $Base -Filter "7z.exe"  -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName,'
+              '    (Get-ChildItem -Path $Base -Filter "7zz.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName,'
+              '    (Get-ChildItem -Path $Base -Filter "7za.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName'
+              '  ) | Where-Object { $_ }'
+              '  if ($c.Count -gt 0) { return $c[0] }'
+              '  $cmd = (Get-Command 7z  -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }'
+              '  $cmd = (Get-Command 7zz -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }'
+              '  $cmd = (Get-Command 7za -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }'
+              '  return $null'
+              '}'
+              '$here = Split-Path -Parent $MyInvocation.MyCommand.Path'
+              '$list = Join-Path $here "parts.txt"'
+              '$partsSha = Join-Path $here "parts.sha256"'
+              '$isoSha = Join-Path $here "iso.sha256"'
+              'if (-not (Test-Path $list)) { Fail "parts.txt missing" }'
+              'if (-not (Test-Path $partsSha)) { Fail "parts.sha256 missing" }'
+              'if (-not (Test-Path $isoSha)) { Fail "iso.sha256 missing" }'
+              '$aria = (Get-ChildItem -Path (Join-Path $here "bin") -Filter "aria2c.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName'
+              'if (-not $aria) { $aria = (Get-Command aria2c -ErrorAction SilentlyContinue)?.Path }'
+              'if (-not $aria) { Fail "aria2c not found" }'
+              '$sevenZip = Resolve-SevenZip -Base (Join-Path $here "bin")'
+              'if (-not $sevenZip) { Fail "7-Zip not found" }'
+              '& $aria --input-file="$list" --dir="$OutputDir" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --console-log-level=warn --summary-interval=0'
+              '$re = [regex]''^(?<hash>[0-9a-f]{64})\s{2}(?<name>.+)$'''
+              '$lines = Get-Content $partsSha | Where-Object { $_ -and ($_ -notmatch "^\s*#") }'
+              'foreach ($ln in $lines) {'
+              '  $m = $re.Match($ln); if (-not $m.Success) { Fail "Malformed: $ln" }'
+              '  $exp = $m.Groups["hash"].Value.ToLower(); $name = $m.Groups["name"].Value'
+              '  $fp = Join-Path $OutputDir $name'
+              '  if (-not (Test-Path $fp)) { Fail "Missing: $name" }'
+              '  $act = (Get-FileHash -Algorithm SHA256 $fp).Hash.ToLower()'
+              '  if ($act -ne $exp) { Fail "Checksum mismatch for $name" }'
+              '}'
+              '$firstPart = Get-ChildItem -Path $OutputDir -Filter "*.zip.001" | Select-Object -First 1'
+              'if (-not $firstPart) { Fail "No *.zip.001 found" }'
+              '& $sevenZip x $firstPart.FullName "-o$OutputDir" -y | Out-Null'
+              '$isoPath = Get-ChildItem -Path $OutputDir -Filter "*.iso" | Select-Object -First 1'
+              'if (-not $isoPath) { Fail "No ISO extracted" }'
+              '$isoLine = Get-Content $isoSha | Select-Object -First 1'
+              '$m2 = [regex]::Match($isoLine, ''^(?<hash>[0-9a-f]{64})\s{2}(?<name>.+)$'')'
+              'if (-not $m2.Success) { Fail "Malformed iso.sha256" }'
+              '$expectedIso = $m2.Groups[''hash''].Value.ToLower()'
+              '$actualIso = (Get-FileHash -Algorithm SHA256 $isoPath.FullName).Hash.ToLower()'
+              'if ($actualIso -ne $expectedIso) { Fail "ISO checksum mismatch" }'
+              'Write-Host "ISO verified: $($isoPath.Name)"'
+            )
+            $path = Join-Path $destDir 'get-with-aria2.ps1'
+            Set-Content -Path $path -Value ($lines -join "`r`n") -Encoding UTF8
+          }
+
+          function New-SH-Unix($destDir) {
+            $lines = @(
+              '#!/usr/bin/env bash'
+              'set -euo pipefail'
+              'OUT_DIR="${1:-.}"'
+              'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+              'LIST_FILE="${SCRIPT_DIR}/parts.txt"'
+              'PARTS_SHA="${SCRIPT_DIR}/parts.sha256"'
+              'ISO_SHA="${SCRIPT_DIR}/iso.sha256"'
+              'die(){ echo "ERROR: $*" >&2; exit 1; }'
+              'if [ -x "${SCRIPT_DIR}/bin/aria2c" ]; then'
+              '  ARIA2="${SCRIPT_DIR}/bin/aria2c"'
+              'elif [ -x "${SCRIPT_DIR}/bin/aria2c.exe" ]; then'
+              '  ARIA2="${SCRIPT_DIR}/bin/aria2c.exe"'
+              'else'
+              '  ARIA2="$(command -v aria2c || true)"; [ -n "${ARIA2}" ] || die "aria2c not found"'
+              'fi'
+              'find7z () {'
+              '  for n in 7z 7zz 7za 7zr; do'
+              '    [ -x "${SCRIPT_DIR}/bin/${n}" ] && { echo "${SCRIPT_DIR}/bin/${n}"; return; }'
+              '  done'
+              '  for n in 7z 7zz 7za 7zr; do'
+              '    if command -v "$n" >/dev/null 2>&1; then command -v "$n"; return; fi'
+              '  done'
+              '  return 1'
+              '}'
+              'SEVEN_ZIP="$(find7z)" || die "7-Zip not found"'
+              'chmod +x "${SEVEN_ZIP}" 2>/dev/null || true'
+              '"${ARIA2}" --input-file="${LIST_FILE}" --dir="${OUT_DIR}" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --console-log-level=warn --summary-interval=0'
+              'if command -v sha256sum >/dev/null 2>&1; then'
+              '  (cd "${OUT_DIR}" && sha256sum -c "${PARTS_SHA}")'
+              'elif command -v shasum >/dev/null 2>&1; then'
+              '  (cd "${OUT_DIR}" && shasum -a 256 -c "${PARTS_SHA}")'
+              'else'
+              '  die "sha256sum/shasum not found"'
+              'fi'
+              'firstpart="$(ls "${OUT_DIR}"/*.zip.001 2>/dev/null | head -n1 || true)"'
+              '[ -n "${firstpart}" ] || die "No *.zip.001 found"'
+              '"${SEVEN_ZIP}" x "$firstpart" -o"${OUT_DIR}" -y >/dev/null'
+              'iso="$(ls "${OUT_DIR}"/*.iso 2>/dev/null | head -n1 || true)"'
+              '[ -n "${iso}" ] || die "No ISO extracted"'
+              'expected_hash="$(cut -d" " -f1 "${ISO_SHA}")"'
+              'if command -v sha256sum >/dev/null 2>&1; then'
+              '  actual_hash="$(sha256sum "${iso}" | awk "{print \$1}")"'
+              'else'
+              '  actual_hash="$(shasum -a 256 "${iso}" | awk "{print \$1}")"'
+              'fi'
+              '[ "${actual_hash}" = "${expected_hash}" ] || die "ISO checksum mismatch"'
+              'echo "ISO verified: $(basename "${iso}")"'
+            )
+            $path = Join-Path $destDir 'get-with-aria2.sh'
+            Set-Content -Path $path -Value (($lines -join "`n")) -Encoding UTF8
+            & bash -lc "chmod +x '$path'"
+          }
 
           $pkgRoot = Join-Path $dist "pkg"
           New-Item -ItemType Directory -Force -Path $pkgRoot | Out-Null
 
-          $platforms = @('windows','linux','macos')
-          foreach ($pf in $platforms) {
+          foreach ($pf in @('windows','linux','macos')) {
             $pkgDir = Join-Path $pkgRoot $pf
             $binDir = Join-Path $pkgDir "bin"
             New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-            Copy-Item $partsPath $pkgDir -Force
+            Copy-Item $partsPath    $pkgDir -Force
             Copy-Item $partsShaPath $pkgDir -Force
-            Copy-Item $isoShaPath $pkgDir -Force
+            Copy-Item $isoShaPath   $pkgDir -Force
 
-            $aDir = if (Test-Path $srcAria2Root) { Get-Aria2-DirForPlatform -base $srcAria2Root -platform $pf } else { $null }
-            if ($aDir) {
-              if ($pf -eq 'windows') {
-                Copy-Item -Path (Join-Path $aDir 'aria2c.exe') -Destination $binDir -Force -ErrorAction SilentlyContinue
-                Get-ChildItem -Path $aDir -Filter '*.dll' -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
+            $ariaPick = Pick-Aria2 $pf
+            if ($ariaPick) {
+              if ($ariaPick -is [System.Array]) {
+                $ariaPick | ForEach-Object { Copy-Item $_.FullName $binDir -Force }
               } else {
-                $aria2c = Get-ChildItem -Path $aDir -Recurse -Filter 'aria2c*' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Select-Object -First 1
-                if ($aria2c) { Copy-Item $aria2c.FullName $binDir -Force }
+                Copy-Item $ariaPick.FullName $binDir -Force
               }
             }
-
-            $zDir = if (Test-Path $src7zRoot) { Get-7z-BinForPlatform -base $src7zRoot -platform $pf } else { $null }
-            if ($zDir) {
-              if ($pf -eq 'windows') {
-                Get-ChildItem -Path $zDir -Include '7z.exe','7zz.exe','7za.exe','*.dll' -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
+            $zPick = Pick-7z $pf
+            if ($zPick) {
+              if ($zPick -is [System.Array]) {
+                $zPick | ForEach-Object { Copy-Item $_.FullName $binDir -Force }
+              } elseif ($zPick -is [System.IO.FileInfo]) {
+                Copy-Item $zPick.FullName $binDir -Force
               } else {
-                Get-ChildItem -Path $zDir -Include '7z','7zz','7za','7zr' -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and -not $_.Name.EndsWith('.exe') } | Copy-Item -Destination $binDir -Force
+                Get-ChildItem -Path $zPick -File | Copy-Item -Destination $binDir -Force
               }
             }
 
             if ($pf -eq 'windows') {
-              $ps1 = @'
-              param([string]$OutputDir = ".")
-              $ErrorActionPreference = "Stop"
-              function Fail($m){ Write-Error $m; exit 1 }
-              function Resolve-SevenZip([string]$Base){
-                $c = @(
-                  (Get-ChildItem -Path $Base -Filter "7z.exe"  -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName,
-                  (Get-ChildItem -Path $Base -Filter "7zz.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName,
-                  (Get-ChildItem -Path $Base -Filter "7za.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName
-                ) | Where-Object { $_ }
-                if ($c.Count -gt 0) { return $c[0] }
-                $cmd = (Get-Command 7z  -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }
-                $cmd = (Get-Command 7zz -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }
-                $cmd = (Get-Command 7za -ErrorAction SilentlyContinue)?.Source; if ($cmd) { return $cmd }
-                return $null
-              }
-              $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-              $list = Join-Path $here "parts.txt"
-              $partsSha = Join-Path $here "parts.sha256"
-              $isoSha = Join-Path $here "iso.sha256"
-              if (-not (Test-Path $list)) { Fail "parts.txt missing" }
-              if (-not (Test-Path $partsSha)) { Fail "parts.sha256 missing" }
-              if (-not (Test-Path $isoSha)) { Fail "iso.sha256 missing" }
-              $aria = (Get-ChildItem -Path (Join-Path $here "bin") -Filter "aria2c.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)?.FullName
-              if (-not $aria) { $aria = (Get-Command aria2c -ErrorAction SilentlyContinue)?.Path }
-              if (-not $aria) { Fail "aria2c not found" }
-              $sevenZip = Resolve-SevenZip -Base (Join-Path $here "bin")
-              if (-not $sevenZip) { Fail "7-Zip not found" }
-              & $aria --input-file="$list" --dir="$OutputDir" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --console-log-level=warn --summary-interval=0
-              $re = [regex]'^(?<hash>[0-9a-f]{64})\s{2}(?<name>.+)$'
-              $lines = Get-Content $partsSha | Where-Object { $_ -and ($_ -notmatch "^\s*#") }
-              foreach ($ln in $lines) {
-                $m = $re.Match($ln); if (-not $m.Success) { Fail "Malformed: $ln" }
-                $exp = $m.Groups["hash"].Value.ToLower(); $name = $m.Groups["name"].Value
-                $fp = Join-Path $OutputDir $name
-                if (-not (Test-Path $fp)) { Fail "Missing: $name" }
-                $act = (Get-FileHash -Algorithm SHA256 $fp).Hash.ToLower()
-                if ($act -ne $exp) { Fail "Checksum mismatch for $name" }
-              }
-              $firstPart = Get-ChildItem -Path $OutputDir -Filter "*.zip.001" | Select-Object -First 1
-              if (-not $firstPart) { Fail "No *.zip.001 found" }
-              & $sevenZip x $firstPart.FullName "-o$OutputDir" -y | Out-Null
-              $isoPath = Get-ChildItem -Path $OutputDir -Filter "*.iso" | Select-Object -First 1
-              if (-not $isoPath) { Fail "No ISO extracted" }
-              $isoLine = Get-Content $isoSha | Select-Object -First 1
-              $m2 = [regex]::Match($isoLine, '^(?<hash>[0-9a-f]{64})\s{2}(?<name>.+)$')
-              if (-not $m2.Success) { Fail "Malformed iso.sha256" }
-              $expectedIso = $m2.Groups['hash'].Value.ToLower()
-              $actualIso = (Get-FileHash -Algorithm SHA256 $isoPath.FullName).Hash.ToLower()
-              if ($actualIso -ne $expectedIso) { Fail "ISO checksum mismatch" }
-              Write-Host "ISO verified: $($isoPath.Name)"
-              '@
-                            $pkgPs1 = Join-Path $pkgDir "get-with-aria2.ps1"
-                            Set-Content -Path $pkgPs1 -Value $ps1 -Encoding UTF8
-                          } else {
-                            $sh = @'
-              #!/usr/bin/env bash
-              set -euo pipefail
-              OUT_DIR="${1:-.}"
-              SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-              LIST_FILE="${SCRIPT_DIR}/parts.txt"
-              PARTS_SHA="${SCRIPT_DIR}/parts.sha256"
-              ISO_SHA="${SCRIPT_DIR}/iso.sha256"
-              die(){ echo "ERROR: $*" >&2; exit 1; }
-              if [ -x "${SCRIPT_DIR}/bin/aria2c" ]; then
-                ARIA2="${SCRIPT_DIR}/bin/aria2c"
-              elif [ -x "${SCRIPT_DIR}/bin/aria2c.exe" ]; then
-                ARIA2="${SCRIPT_DIR}/bin/aria2c.exe"
-              else
-                ARIA2="$(command -v aria2c || true)"; [ -n "${ARIA2}" ] || die "aria2c not found"
-              fi
-              find7z () {
-                for n in 7z 7zz 7za 7zr; do
-                  [ -x "${SCRIPT_DIR}/bin/${n}" ] && { echo "${SCRIPT_DIR}/bin/${n}"; return; }
-                done
-                for n in 7z 7zz 7za 7zr; do
-                  if command -v "$n" >/dev/null 2>&1; then command -v "$n"; return; fi
-                done
-                return 1
-              }
-              SEVEN_ZIP="$(find7z)" || die "7-Zip not found"
-              chmod +x "${SEVEN_ZIP}" 2>/dev/null || true
-              "${ARIA2}" --input-file="${LIST_FILE}" --dir="${OUT_DIR}" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --console-log-level=warn --summary-interval=0
-              if command -v sha256sum >/dev/null 2>&1; then
-                (cd "${OUT_DIR}" && sha256sum -c "${PARTS_SHA}")
-              elif command -v shasum >/dev/null 2>&1; then
-                (cd "${OUT_DIR}" && shasum -a 256 -c "${PARTS_SHA}")
-              else
-                die "sha256sum/shasum not found"
-              fi
-              firstpart="$(ls "${OUT_DIR}"/*.zip.001 2>/dev/null | head -n1 || true)"
-              [ -n "${firstpart}" ] || die "No *.zip.001 found"
-              "${SEVEN_ZIP}" x "$firstpart" -o"${OUT_DIR}" -y >/dev/null
-              iso="$(ls "${OUT_DIR}"/*.iso 2>/dev/null | head -n1 || true)"
-              [ -n "${iso}" ] || die "No ISO extracted"
-              expected_hash="$(cut -d' ' -f1 "${ISO_SHA}")"
-              if command -v sha256sum >/dev/null 2>&1; then
-                actual_hash="$(sha256sum "${iso}" | awk '{print $1}')"
-              else
-                actual_hash="$(shasum -a 256 "${iso}" | awk '{print $1}')"
-              fi
-              [ "${actual_hash}" = "${expected_hash}" ] || die "ISO checksum mismatch"
-              echo "ISO verified: $(basename "${iso}")"
-              '@
-              $pkgSh = Join-Path $pkgDir "get-with-aria2.sh"
-              $shLF = $sh -replace "`r`n","`n"
-              Set-Content -Path $pkgSh -Value $shLF -Encoding UTF8
-              & bash -lc "chmod +x '$pkgSh'"
+              New-PS1-Windows -destDir $pkgDir
+            } else {
+              New-SH-Unix -destDir $pkgDir
             }
           }
 
-          $zipWin  = Join-Path $dist "split-download-windows.zip"
-          $zipLin  = Join-Path $dist "split-download-linux.zip"
-          $zipMac  = Join-Path $dist "split-download-macos.zip"
+          $zipWin = Join-Path $dist "split-download-windows.zip"
+          $zipLin = Join-Path $dist "split-download-linux.zip"
+          $zipMac = Join-Path $dist "split-download-macos.zip"
           foreach ($pair in @(
             @{ p='windows'; z=$zipWin },
             @{ p='linux'  ; z=$zipLin },
