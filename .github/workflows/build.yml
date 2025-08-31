@@ -520,7 +520,9 @@ jobs:
           echo "Final ISO SHA256 verified."
           '@
           $shPath = Join-Path $outDir "get-with-aria2.sh"
-          Set-Content -Path $shPath -Value $sh -Encoding UTF8
+          # zapisz z LF zamiast CRLF
+          $shClean = $sh -replace "`r`n","`n"
+          Set-Content -Path $shPath -Value $shClean -Encoding UTF8
           & bash -lc "chmod +x '$shPath'"
 
           # 7) ZIP package (now includes aria2 binaries)
