@@ -368,7 +368,7 @@ jobs:
           Set-Content -Path $isoShaPath -Value "$expectedIsoHash  ${{ env.ISO_NAME }}" -Encoding ASCII
 
           # 4) Copy bundled aria2 binaries from checked-out branch
-          $srcAria2 = Join-Path $ws "_aria2/aria2"
+          $srcAria2 = Join-Path $ws "aria2"
           $dstAria2 = Join-Path $outDir "aria2-bin"
           if (Test-Path $srcAria2) {
             Copy-Item -Path (Join-Path $srcAria2 '*') -Destination $dstAria2 -Recurse -Force
