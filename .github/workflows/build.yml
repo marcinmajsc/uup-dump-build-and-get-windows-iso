@@ -359,7 +359,7 @@ jobs:
           $srcAria2 = Join-Path $ws "aria2"
           $src7z    = Join-Path $ws "7z"
 
-          function Pick-Aria2($platform) {
+          function Pick-Aria2 {
             param([string]$platform)
             if (-not (Test-Path $srcAria2)) { return @() }
             switch ($platform) {
@@ -377,7 +377,7 @@ jobs:
             }
           }
 
-          function Pick-7z($platform) {
+          function Pick-7z {
             param([string]$platform)
             if (-not (Test-Path $src7z)) { return @() }
             switch ($platform) {
@@ -395,7 +395,8 @@ jobs:
             }
           }
 
-          function New-PS1-Windows($destDir) {
+          function New-PS1-Windows {
+            param([string]$destDir)
             $lines = @(
               'param([string]$OutputDir = ".")'
               '$ErrorActionPreference = "Stop"'
@@ -452,7 +453,8 @@ jobs:
             Set-Content -Path $path -Value ($lines -join "`r`n") -Encoding UTF8
           }
 
-          function New-SH-Unix($destDir) {
+          function New-SH-Unix {
+            param([string]$destDir)
             $lines = @(
               '#!/usr/bin/env bash'
               'set -euo pipefail'
@@ -519,7 +521,7 @@ jobs:
             Copy-Item $partsShaPath $pkgDir -Force
             Copy-Item $isoShaPath   $pkgDir -Force
 
-            $ariaPick = Pick-Aria2 $pf
+            $ariaPick = Pick-Aria2 -platform $pf
             if ($ariaPick) {
               if ($ariaPick -is [System.Array]) {
                 $ariaPick | ForEach-Object { Copy-Item $_.FullName $binDir -Force }
@@ -527,7 +529,8 @@ jobs:
                 Copy-Item $ariaPick.FullName $binDir -Force
               }
             }
-            $zPick = Pick-7z $pf
+
+            $zPick = Pick-7z -platform $pf
             if ($zPick) {
               if ($zPick -is [System.Array]) {
                 $zPick | ForEach-Object { Copy-Item $_.FullName $binDir -Force }
