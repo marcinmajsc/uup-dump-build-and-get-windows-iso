@@ -442,9 +442,8 @@ jobs:
 
             switch ($platform) {
               'windows' {
-                Copy-Item -Path (Join-Path $utils 'aria2/win/aria2c.exe') -Destination $binDir -Force -ErrorAction SilentlyContinue
                 Get-ChildItem (Join-Path $utils 'aria2/win') -Filter '*.dll' -File -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
-                Get-ChildItem (Join-Path $utils '7z/win') -Include '7z.exe','7zz.exe','7za.exe','*.dll' -File -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
+                Get-ChildItem (Join-Path $utils '7z/win') -Include '7za.exe','*.dll' -File -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
                 New-PS1 -destDir $pkgDir
               }
               'linux' {
