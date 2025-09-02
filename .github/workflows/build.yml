@@ -430,7 +430,7 @@ jobs:
             & bash -lc "chmod +x '$path'"
           }
 
-          function Copy-Platform {
+                    function Copy-Platform {
             param([string]$platform,[string]$arch,[string]$zipName)
             $pkgDir = Join-Path $dist ("pkg-" + $platform + "-" + $arch)
             $binDir = Join-Path $pkgDir "bin"
@@ -442,8 +442,10 @@ jobs:
 
             switch ($platform) {
               'windows' {
-                Get-ChildItem (Join-Path $utils 'aria2/win') -Filter '*.dll' -File -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
-                Get-ChildItem (Join-Path $utils '7z/win') -Include '7za.exe','*.dll' -File -ErrorAction SilentlyContinue | Copy-Item -Destination $binDir -Force
+                Copy-Item (Join-Path $utils 'aria2/win/aria2c.exe') $binDir -Force
+                Copy-Item (Join-Path $utils '7z/win/7za.exe') $binDir -Force
+                Copy-Item (Join-Path $utils '7z/win/7za.dll') $binDir -Force
+                Copy-Item (Join-Path $utils '7z/win/7zxa.dll') $binDir -Force
                 New-PS1 -destDir $pkgDir
               }
               'linux' {
