@@ -430,7 +430,7 @@ jobs:
             & bash -lc "chmod +x '$path'"
           }
 
-                    function Copy-Platform {
+          function Copy-Platform {
             param([string]$platform,[string]$arch,[string]$zipName)
             $pkgDir = Join-Path $dist ("pkg-" + $platform + "-" + $arch)
             $binDir = Join-Path $pkgDir "bin"
