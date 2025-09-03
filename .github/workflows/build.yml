@@ -354,7 +354,7 @@ jobs:
           }
 
           # Linia checksum ISO do osadzenia (wartość policzona w kroku build)
-          $isoLine = "${{ env.iso_checksum }}  ${{ env.ISO_NAME }}"
+          $isoLine = "echo( ${{ env.iso_checksum }}  ${{ env.ISO_NAME }}"
 
           $utils = Join-Path $ws "Utils"
 
@@ -387,7 +387,7 @@ jobs:
               '',
               'rem Write embedded ISO SHA256',
               '( '
-            ) + 'echo( ' + $IsoLine + @(
+            ) + $IsoLine + @(
               ' ) > "%TMPDIR%\iso.sha256"',
               '',
               'echo Starting download parts with Aria2',
@@ -443,7 +443,7 @@ jobs:
               'EOF_PARTS',
               '',
               'cat > "${ISO_SHA}" << "EOF_ISO"',
-              $IsoLine,
+              '"${{ env.iso_checksum }}  ${{ env.ISO_NAME }}"',
               'EOF_ISO',
               '',
               'echo "Starting download parts with Aria2"',
