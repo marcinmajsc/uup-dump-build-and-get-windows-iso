@@ -386,7 +386,9 @@ jobs:
               ') > "%TMPDIR%\parts.txt"',
               '',
               'rem Write embedded ISO SHA256',
-              'echo ' + $IsoLine + ' > "%TMPDIR%\iso.sha256"',
+              '( '
+            ) + $IsoLine + @(
+              ' ) > "%TMPDIR%\iso.sha256"',
               '',
               'echo Starting download parts with Aria2',
               'echo.',
