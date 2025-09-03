@@ -416,6 +416,8 @@ jobs:
               'echo ISO verified: %ISO%',
               'echo.',
               'echo Done',
+              'echo.',
+              'pause',
               'exit /b 0'
             )
             $path = Join-Path $destDir 'get-with-aria2.cmd'
@@ -472,7 +474,9 @@ jobs:
               '',
               'echo "ISO verified: $(basename "${iso}")"',
               'echo',
-              'echo "Done"'
+              'echo "Done"',
+              'echo',
+              'read -rsn1 -p"Press any key to continue";echo'
             )
             $path = Join-Path $destDir 'get-with-aria2.sh'
             Set-Content -Path $path -Value (($lines -join "`n")) -Encoding UTF8
