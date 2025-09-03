@@ -339,11 +339,9 @@ jobs:
           $dist = Join-Path $ws "dist"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          # Zbierz lokalne części split (nazwy muszą odpowiadać assetom z release)
           $localParts = Get-ChildItem "C:/output/${{ env.ISO_NAME }}.zip.0*" -File | Sort-Object Name
           if (-not $localParts) { throw "No local split parts found in C:/output/${{ env.ISO_NAME }}.zip.0**" }
 
-          # Zbuduj linie dla aria2 (URL + checksum + out=...), checksum liczony lokalnie
           $partsLines = @()
           foreach ($p in $localParts) {
             $sha = (Get-FileHash -Algorithm SHA256 $p.FullName).Hash.ToLowerInvariant()
@@ -353,7 +351,6 @@ jobs:
             $partsLines += "  out=$($p.Name)"
           }
 
-          # Linia checksum ISO do osadzenia (wartość policzona w kroku build)
           $isoLine = "echo( ${{ env.iso_checksum }}  ${{ env.ISO_NAME }}"
 
           $utils = Join-Path $ws "Utils"
@@ -490,21 +487,34 @@ jobs:
             $binDir = Join-Path $pkgDir "bin"
             New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-            switch ($platform) {
-              'windows' {
+            switch ("$platform-$arch") {
+              'windows-x64' {
                 Copy-Item (Join-Path $utils 'aria2/windows-x64/aria2c.exe') $binDir -Force
                 Copy-Item (Join-Path $utils '7z/windows-x64/7za.exe')       $binDir -Force
                 Copy-Item (Join-Path $utils '7z/windows-x64/7za.dll')       $binDir -Force
                 Copy-Item (Join-Path $utils '7z/windows-x64/7zxa.dll')      $binDir -Force
                 New-BAT -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
-              'linux' {
+              'windows-arm64' {
+                Copy-Item (Join-Path $utils 'aria2/windows-arm64/aria2c.exe') $binDir -Force
+                Copy-Item (Join-Path $utils '7z/windows-arm64/7za.exe')       $binDir -Force
+                if (Test-Path (Join-Path $utils '7z/windows-arm64/7za.dll'))  { Copy-Item (Join-Path $utils '7z/windows-arm64/7za.dll')  $binDir -Force }
+                if (Test-Path (Join-Path $utils '7z/windows-arm64/7zxa.dll')) { Copy-Item (Join-Path $utils '7z/windows-arm64/7zxa.dll') $binDir -Force }
+                New-BAT -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
+              }
+              'linux-x64' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-x64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-x64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
-              'macos' {
+              'linux-arm64' {
+                Get-ChildItem (Join-Path $utils 'aria2/linux-arm64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                Get-ChildItem (Join-Path $utils '7z/linux-arm64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
+                New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
+              }
+              'macos-universal' {
                 Get-ChildItem (Join-Path $utils 'aria2/macos-universal') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/macos-universal')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
@@ -517,9 +527,11 @@ jobs:
             Compress-Archive -Path (Join-Path $pkgDir '*') -DestinationPath $zipPath -Force
           }
 
-          Copy-Platform -platform 'windows' -arch 'x64'       -zipName 'split-download-windows-x64.zip'
-          Copy-Platform -platform 'linux'   -arch 'x64'       -zipName 'split-download-linux-x64.zip'
-          Copy-Platform -platform 'macos'   -arch 'universal' -zipName 'split-download-macos-universal.zip'
+          Copy-Platform -platform 'windows' -arch 'x64'       -zipName 'isoautodl-windows-x64.zip'
+          Copy-Platform -platform 'windows' -arch 'arm64'     -zipName 'isoautodl-windows-arm64.zip'
+          Copy-Platform -platform 'linux'   -arch 'x64'       -zipName 'isoautodl-linux-x64.zip'
+          Copy-Platform -platform 'linux'   -arch 'arm64'     -zipName 'isoautodl-linux-arm64.zip'
+          Copy-Platform -platform 'macos'   -arch 'universal' -zipName 'isoautodl-macos-universal.zip'
 
       - name: Upload platform ZIPs to Release
         if: ${{ success() }}
@@ -532,9 +544,11 @@ jobs:
           if (-not $tag) { $tag = gh release view --json tagName -q '.tagName' }
           $dist = Join-Path $env:GITHUB_WORKSPACE "dist"
           $files = @(
-            "split-download-windows-x64.zip",
-            "split-download-linux-x64.zip",
-            "split-download-macos-universal.zip"
+            "isoautodl-windows-x64.zip",
+            "isoautodl-windows-arm64.zip",
+            "isoautodl-linux-x64.zip",
+            "isoautodl-linux-arm64.zip",
+            "isoautodl-macos-universal.zip"
           ) | ForEach-Object { Join-Path $dist $_ }
           foreach ($f in $files) {
             if (-not (Test-Path $f)) { throw "ZIP not found: $f" }
