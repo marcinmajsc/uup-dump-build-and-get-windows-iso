@@ -103,9 +103,9 @@ When everything works correctly, you'll have the iso in the `output` directory a
   |    |    |    .---------------- System Edition
   |    |    |    |   .------------ CPU architecture
   |    |    |    |   |  .--------- Language
-  |    |    |    |   |  |  .------ Image is compressed by ESD
-  |    |    |    |   |  |  | .---- Include additional drivers
-  |    |    |    |   |  |  | | .-- Include .NET Framework 3.5
+  |    |    |    |   |  |  .------ Image is compressed by ESD (optional)
+  |    |    |    |   |  |  | .---- Include additional drivers (optional)
+  |    |    |    |   |  |  | | .-- Include .NET Framework 3.5 (optional)
 __|__ _|__ _|__ _|_ _|_ |_ | | |
 26100.4946.24H2.PRO.X64.PL.E.D.N
 ```
