@@ -1,12 +1,31 @@
 #!/usr/bin/pwsh
 
+[CmdletBinding()]
 param(
+  [Parameter(Mandatory)]
+  [ValidateSet(
+    "windows-10",
+    "windows-11old",
+    "windows-11",
+    "windows-11new",
+    "windows-11beta",
+    "windows-11dev",
+    "windows-11canary"
+  )]
   [string]$windowsTargetName,
+
+  [ValidateNotNullOrEmpty()]
   [string]$destinationDirectory = 'output',
-  [ValidateSet("x64", "arm64")] [string]$architecture = "x64",
-  [ValidateSet("pro", "core", "multi", "home")] [string]$edition = "pro",
+
+  [ValidateSet("x64", "arm64")]
+  [string]$architecture = "x64",
+
+  [ValidateSet("pro", "core", "multi", "home")]
+  [string]$edition = "pro",
+
   [ValidateSet("nb-no", "fr-ca", "fi-fi", "lv-lv", "es-es", "en-gb", "zh-tw", "th-th", "sv-se", "en-us", "es-mx", "bg-bg", "hr-hr", "pt-br", "el-gr", "cs-cz", "it-it", "sk-sk", "pl-pl", "sl-si", "neutral", "ja-jp", "et-ee", "ro-ro", "fr-fr", "pt-pt", "ar-sa", "lt-lt", "hu-hu", "da-dk", "zh-cn", "uk-ua", "tr-tr", "ru-ru", "nl-nl", "he-il", "ko-kr", "sr-latn-rs", "de-de")]
   [string]$lang = "en-us",
+
   [switch]$esd,
   [switch]$drivers,
   [switch]$netfx3
@@ -36,6 +55,14 @@ function Write-CleanLine([string]$text) {
   if ($clean -eq $script:LastPrintedLine) { return }
   $script:LastPrintedLine = $clean
   Write-Host $clean
+}
+
+function Write-SkipReason {
+  param(
+    [Parameter(Mandatory)][string]$Reason
+  )
+
+  Write-CleanLine ("Skipping. {0}" -f $Reason)
 }
 
 # DISM buckets (0/10/.../100)
@@ -112,14 +139,16 @@ function Get-EditionName($e) {
   }
 }
 
+$editionName = Get-EditionName $edition
+
 $TARGETS = @{
-  "windows-10"       = @{ search="windows 10 19045 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11old"    = @{ search="windows 11 22631 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11"       = @{ search="windows 11 26100 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11new"    = @{ search="windows 11 26200 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11beta"   = @{ search="windows 11 26120 $arch"; edition=(Get-EditionName $edition); ring="Beta" }
-  "windows-11dev"    = @{ search="windows 11 26200 $arch"; edition=(Get-EditionName $edition); ring="Dev" }
-  "windows-11canary" = @{ search="windows 11 preview $arch"; edition=(Get-EditionName $edition); ring="Canary" }
+  "windows-10"       = @{ search="windows 10 19045 $arch"; edition=$editionName }
+  "windows-11old"    = @{ search="windows 11 22631 $arch"; edition=$editionName }
+  "windows-11"       = @{ search="windows 11 26100 $arch"; edition=$editionName }
+  "windows-11new"    = @{ search="windows 11 26200 $arch"; edition=$editionName }
+  "windows-11beta"   = @{ search="windows 11 26120 $arch"; edition=$editionName; ring="Beta" }
+  "windows-11dev"    = @{ search="windows 11 26200 $arch"; edition=$editionName; ring="Dev" }
+  "windows-11canary" = @{ search="windows 11 preview $arch"; edition=$editionName; ring="Canary" }
 }
 
 function New-QueryString([hashtable]$parameters) {
@@ -158,9 +187,7 @@ function Get-UupDumpIso($name, $target) {
       if (!$preview) {
         $ok = ($target.search -like '*preview*') -or ($_.Value.title -notlike '*preview*')
         if (-not $ok) {
-          Write-CleanLine "Skipping.
-L1: Expected preview=false.
-L2: Got preview=true."
+          Write-SkipReason 'Expected preview=false. Got preview=true.'
         }
         return $ok
       }
@@ -181,9 +208,8 @@ L2: Got preview=true."
         $result = Invoke-UupDumpApi listeditions @{ id = $id; lang = $lang }
         $result.response.editionFancyNames
       } else {
-        Write-CleanLine "Skipping.
-L3: Expected langs=$lang.
-L4: Got langs=$($langs -join ',')."
+        $langsJoined = $langs -join ', '
+        Write-SkipReason ("Expected langs={0}. Got langs={1}." -f $lang, $langsJoined)
         [PSCustomObject]@{}
       }
       $_.Value | Add-Member -NotePropertyMembers @{ editions = $eds }
@@ -199,32 +225,30 @@ L4: Got langs=$($langs -join ',')."
         $actual = ($_.Value.info.ring).ToUpper()
         if ($ringLower -in @('dev','beta')) {
           if ($actual -notin @($expectedRing, 'WIF', 'WIS')) {
-            Write-CleanLine "Skipping.
-L5: Expected ring match for $expectedRing, WIS or WIF. Got ring=$actual."
+            Write-SkipReason ("Expected ring match for {0}, WIS or WIF. Got ring={1}." -f $expectedRing, $actual)
             $res = $false
           }
-        } else {
-          if ($actual -ne $expectedRing) {
-            Write-CleanLine "Skipping. Expected ring match for $expectedRing. Got ring=$actual."
-            $res = $false
-          }
+        } elseif ($actual -ne $expectedRing) {
+          Write-SkipReason ("Expected ring match for {0}. Got ring={1}." -f $expectedRing, $actual)
+          $res = $false
         }
       }
 
       if ($langs -notcontains $lang) {
-        Write-CleanLine "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
+        $langsJoined = $langs -join ', '
+        Write-SkipReason ("Expected langs={0}. Got langs={1}." -f $lang, $langsJoined)
         $res = $false
       }
 
-      if ((Get-EditionName $edition) -eq "Multi") {
-        if (($editions -notcontains "Professional") -and ($editions -notcontains "Core")) {
-          Write-CleanLine "Skipping.
-L6: Expected editions=Multi (Professional/Core). Got editions=$($editions -join ',')."
+      $requestedEditionName = $editionName
+      $editionsJoined = $editions -join ', '
+      if ($requestedEditionName -eq 'Multi') {
+        if (($editions -notcontains 'Professional') -and ($editions -notcontains 'Core')) {
+          Write-SkipReason ("Expected editions=Multi (Professional/Core). Got editions={0}." -f $editionsJoined)
           $res = $false
         }
-      } elseif ($editions -notcontains (Get-EditionName $edition)) {
-        Write-CleanLine ("Skipping. Expected editions={0}.
-L7: Got editions={1}." -f (Get-EditionName $edition), ($editions -join ','))
+      } elseif ($editions -notcontains $requestedEditionName) {
+        Write-SkipReason ("Expected editions={0}. Got editions={1}." -f $requestedEditionName, $editionsJoined)
         $res = $false
       }
 
@@ -240,9 +264,9 @@ L7: Got editions={1}." -f (Get-EditionName $edition), ($editions -join ','))
         id                 = $id
         edition            = $target.edition
         virtualEdition     = $target['virtualEdition']
-        apiUrl             = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ id = $id; lang = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
-        downloadUrl        = 'https://uupdump.net/download.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
-        downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
+        apiUrl             = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ id = $id; lang = $lang; edition = if ($editionName -eq 'Multi') { 'core;professional' } else { $target.edition } })
+        downloadUrl        = 'https://uupdump.net/download.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($editionName -eq 'Multi') { 'core;professional' } else { $target.edition } })
+        downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ id = $id; pack = $lang; edition = if ($editionName -eq 'Multi') { 'core;professional' } else { $target.edition } })
       }
     }
 }
@@ -322,10 +346,14 @@ function Get-WindowsIso($name, $destinationDirectory) {
     $verbuild = $ringLower.ToUpper()
   }
 
-  $buildDirectory               = "$destinationDirectory/$name"
-  $destinationIsoPath           = "$buildDirectory.iso"
-  $destinationIsoMetadataPath   = "$destinationIsoPath.json"
-  $destinationIsoChecksumPath   = "$destinationIsoPath.sha256.txt"
+  $buildDirectory             = Join-Path -Path $destinationDirectory -ChildPath $name
+  $destinationIsoPath         = Join-Path -Path $destinationDirectory -ChildPath ("$name.iso")
+  $destinationIsoMetadataPath = '{0}.json' -f $destinationIsoPath
+  $destinationIsoChecksumPath = '{0}.sha256.txt' -f $destinationIsoPath
+
+  if (-not (Test-Path $destinationDirectory)) {
+    New-Item -ItemType Directory -Force $destinationDirectory | Out-Null
+  }
 
   if (Test-Path $buildDirectory) { Remove-Item -Force -Recurse $buildDirectory | Out-Null }
   New-Item -ItemType Directory -Force $buildDirectory | Out-Null
@@ -336,10 +364,19 @@ function Get-WindowsIso($name, $destinationDirectory) {
 
   Write-CleanLine "Downloading the UUP dump download package for $title from $($iso.downloadPackageUrl)"
   $downloadPackageBody = if ($hasVirtualMember) { @{ autodl=3; updates=1; cleanup=1; 'virtualEditions[]'=$iso.virtualEdition } } else { @{ autodl=2; updates=1; cleanup=1 } }
-  Invoke-WebRequest -Method Post -Uri $iso.downloadPackageUrl -Body $downloadPackageBody -OutFile "$buildDirectory.zip" | Out-Null
-  Expand-Archive "$buildDirectory.zip" $buildDirectory
+  $packageArchivePath = Join-Path -Path $destinationDirectory -ChildPath ("$name.zip")
+  Invoke-WebRequest -Method Post -Uri $iso.downloadPackageUrl -Body $downloadPackageBody -OutFile $packageArchivePath | Out-Null
+  try {
+    Expand-Archive -Path $packageArchivePath -DestinationPath $buildDirectory -Force
+  }
+  finally {
+    if (Test-Path $packageArchivePath) {
+      Remove-Item -Force $packageArchivePath
+    }
+  }
 
-  $convertConfig = (Get-Content $buildDirectory/ConvertConfig.ini) `
+  $convertConfigPath = Join-Path -Path $buildDirectory -ChildPath 'ConvertConfig.ini'
+  $convertConfig = (Get-Content $convertConfigPath) `
     -replace '^(AutoExit\s*)=.*','$1=1' `
     -replace '^(ResetBase\s*)=.*','$1=1' `
     -replace '^(Cleanup\s*)=.*','$1=1'
@@ -349,8 +386,14 @@ function Get-WindowsIso($name, $destinationDirectory) {
   if ($drivers -and $arch -ne "arm64") {
     $convertConfig = $convertConfig -replace '^(AddDrivers\s*)=.*', '$1=1'
     $tag += ".D"
-    Write-CleanLine "Copy Dell drivers to $buildDirectory directory"
-    Copy-Item -Path Drivers -Destination $buildDirectory/Drivers -Recurse
+    $driverSource = Join-Path -Path $PSScriptRoot -ChildPath 'Drivers'
+    if (-not (Test-Path -Path $driverSource -PathType Container)) {
+      throw "Dell drivers directory not found at $driverSource"
+    }
+
+    Write-CleanLine "Copy Dell drivers from $driverSource to $buildDirectory directory"
+    $driversDestination = Join-Path -Path $buildDirectory -ChildPath 'Drivers'
+    Copy-Item -Path $driverSource -Destination $driversDestination -Recurse -Force
   }
   if ($netfx3) { $convertConfig = $convertConfig -replace '^(NetFx3\s*)=.*', '$1=1'; $tag += ".N" }
   if ($hasVirtualMember) {
@@ -359,48 +402,52 @@ function Get-WindowsIso($name, $destinationDirectory) {
       -replace '^(vDeleteSource\s*)=.*','$1=1' `
       -replace '^(vAutoEditions\s*)=.*',"`$1=$($iso.virtualEdition)"
   }
-  Set-Content -Encoding ascii -Path $buildDirectory/ConvertConfig.ini -Value $convertConfig
+  Set-Content -Encoding ascii -Path $convertConfigPath -Value $convertConfig
 
   Write-CleanLine "Creating the $title iso file inside the $buildDirectory directory"
   Push-Location $buildDirectory
+  try {
+    # Patch aria2 flags in the batch before running it (sed variant A, with PS fallback)
+    $downloadScriptPath = Join-Path -Path $buildDirectory -ChildPath 'uup_download_windows.cmd'
+    Patch-Aria2-Flags -CmdPath $downloadScriptPath
 
-  # Patch aria2 flags in the batch before running it (sed variant A, with PS fallback)
-  Patch-Aria2-Flags -CmdPath (Join-Path $buildDirectory 'uup_download_windows.cmd')
+    # Raw log path
+    $runnerTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $rawLog = Join-Path $runnerTemp "uup_dism_aria2_raw.log"
 
-  # Raw log path
-  $rawLog = Join-Path $env:RUNNER_TEMP "uup_dism_aria2_raw.log"
-
-  & {
-    powershell cmd /c uup_download_windows.cmd 2>&1 |
-      Tee-Object -FilePath $rawLog |
-      ForEach-Object {
-        $raw = [string]$_
-        if ([string]::IsNullOrEmpty($raw)) { return }
-        foreach ($crChunk in ($raw -split "`r")) {
-          foreach ($line in ($crChunk -split "`n")) {
-            if ($line -eq $null) { continue }
-            # DISM progress buckets; aria2 is not parsed here
-            if (-not (Process-ProgressLine $line)) {
-              if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
-                Reset-ProgressSession
+    & {
+      powershell cmd /c uup_download_windows.cmd 2>&1 |
+        Tee-Object -FilePath $rawLog |
+        ForEach-Object {
+          $raw = [string]$_
+          if ([string]::IsNullOrEmpty($raw)) { return }
+          foreach ($crChunk in ($raw -split "`r")) {
+            foreach ($line in ($crChunk -split "`n")) {
+              if ($line -eq $null) { continue }
+              # DISM progress buckets; aria2 is not parsed here
+              if (-not (Process-ProgressLine $line)) {
+                if ($line -match '^\s*(Mounting image|Saving image|Applying image|Exporting image|Unmounting image|Deployment Image Servicing and Management tool|^=== )') {
+                  Reset-ProgressSession
+                }
+                Write-CleanLine $line
               }
-              Write-CleanLine $line
             }
           }
         }
-      }
+    }
+
+    if ($LASTEXITCODE) {
+      Write-Host "::warning title=Build failed::Dumping last 1500 raw log lines"
+      Get-Content $rawLog -Tail 1500 | Write-Host
+      throw "uup_download_windows.cmd failed with exit code $LASTEXITCODE"
+    }
+  }
+  finally {
+    Pop-Location
   }
 
-  if ($LASTEXITCODE) {
-    Write-Host "::warning title=Build failed::Dumping last 1500 raw log lines"
-    Get-Content $rawLog -Tail 1500 | Write-Host
-    throw "uup_download_windows.cmd failed with exit code $LASTEXITCODE"
-  }
-
-  Pop-Location
-
-  $sourceIsoPath = Resolve-Path $buildDirectory/*.iso
-  $IsoName = Split-Path $sourceIsoPath -leaf
+  $sourceIsoPath = Get-ChildItem -Path $buildDirectory -Filter *.iso -ErrorAction Stop | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1 | Select-Object -ExpandProperty FullName
+  $IsoName = Split-Path $sourceIsoPath -Leaf
 
   Write-CleanLine "Getting the $sourceIsoPath checksum"
   $isoChecksum = (Get-FileHash -Algorithm SHA256 $sourceIsoPath).Hash.ToLowerInvariant()
@@ -426,9 +473,12 @@ function Get-WindowsIso($name, $destinationDirectory) {
   )
 
   Write-CleanLine "Moving the created $sourceIsoPath to $destinationDirectory/$IsoName"
-  Move-Item -Force $sourceIsoPath "$destinationDirectory/$IsoName"
+  $finalIsoPath = Join-Path -Path $destinationDirectory -ChildPath $IsoName
+  Move-Item -Force $sourceIsoPath $finalIsoPath
 
-  Write-Output "ISO_NAME=$IsoName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+  if ($env:GITHUB_ENV) {
+    Write-Output "ISO_NAME=$IsoName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+  }
   Write-CleanLine 'All Done.'
 }
 
