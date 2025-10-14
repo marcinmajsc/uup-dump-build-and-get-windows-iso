@@ -545,21 +545,18 @@ jobs:
               'linux-x64' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-x64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-x64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
-                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
               'linux-arm' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-arm') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-arm')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
-                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
               'linux-arm64' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-arm64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-arm64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
-                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
