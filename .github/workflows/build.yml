@@ -496,7 +496,7 @@ jobs:
               'done',
               '[ -n "$iso" ] || { echo "ERROR: ISO not found" >&2; exit 1; }',
               '',
-              'echo "Checking ISO hash"',
+              'echo "Checking ISO hash (no progress visible!)"',
               'expected_hash=$(cut -d" " -f1 "$ISO_SHA")',
               'if command -v sha256sum >/dev/null 2>&1; then',
               '  actual_hash=$(sha256sum "$iso" | awk "{print \$1}")',
