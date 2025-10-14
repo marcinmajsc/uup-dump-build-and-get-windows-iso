@@ -438,7 +438,7 @@ jobs:
               'mkdir -p "$TMPDIR"',
               'find "$SCRIPT_DIR/bin/" -type f -exec chmod +x {} \;',
               '',
-              'for c in "$SCRIPT_DIR/bin/7z" "$SCRIPT_DIR/bin/7zz" "$SCRIPT_DIR/bin/7za"; do',
+              'for c in "$SCRIPT_DIR/bin/7zzs" "$SCRIPT_DIR/bin/7z" "$SCRIPT_DIR/bin/7za" "$SCRIPT_DIR/bin/7zz"; do',
               '  if [ -x "$c" ] && "$c" i >/dev/null 2>&1; then SEVEN_ZIP="$c"; break; fi',
               'done',
               '',
@@ -545,12 +545,21 @@ jobs:
               'linux-x64' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-x64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-x64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
+                & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
+                New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
+              }
+              'linux-arm' {
+                Get-ChildItem (Join-Path $utils 'aria2/linux-arm') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                Get-ChildItem (Join-Path $utils '7z/linux-arm')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
               'linux-arm64' {
                 Get-ChildItem (Join-Path $utils 'aria2/linux-arm64') -Filter 'aria2c*' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
                 Get-ChildItem (Join-Path $utils '7z/linux-arm64')    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.exe' } | Copy-Item -Destination $binDir -Force
+                if (Test-Path (Join-Path $binDir '7zz')) { Remove-Item (Join-Path $binDir '7zz') -Force }
                 & bash -lc "chmod +x '$binDir/*' 2>/dev/null || true"
                 New-SH -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
@@ -570,6 +579,7 @@ jobs:
           Copy-Platform -platform 'windows' -arch 'x64'       -zipName 'isoautodl-windows-x64.zip'
           Copy-Platform -platform 'windows' -arch 'arm64'     -zipName 'isoautodl-windows-arm64.zip'
           Copy-Platform -platform 'linux'   -arch 'x64'       -zipName 'isoautodl-linux-x64.zip'
+          Copy-Platform -platform 'linux'   -arch 'arm'       -zipName 'isoautodl-linux-arm.zip'
           Copy-Platform -platform 'linux'   -arch 'arm64'     -zipName 'isoautodl-linux-arm64.zip'
           Copy-Platform -platform 'macos'   -arch 'universal' -zipName 'isoautodl-macos-universal.zip'
 
@@ -587,6 +597,7 @@ jobs:
             "isoautodl-windows-x64.zip",
             "isoautodl-windows-arm64.zip",
             "isoautodl-linux-x64.zip",
+            "isoautodl-linux-arm.zip",
             "isoautodl-linux-arm64.zip",
             "isoautodl-macos-universal.zip"
           ) | ForEach-Object { Join-Path $dist $_ }
