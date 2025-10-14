@@ -531,15 +531,11 @@ jobs:
               'windows-x64' {
                 Copy-Item (Join-Path $utils 'aria2/windows-x64/aria2c.exe') $binDir -Force
                 Copy-Item (Join-Path $utils '7z/windows-x64/7za.exe')       $binDir -Force
-                Copy-Item (Join-Path $utils '7z/windows-x64/7za.dll')       $binDir -Force
-                Copy-Item (Join-Path $utils '7z/windows-x64/7zxa.dll')      $binDir -Force
                 New-BAT -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
               'windows-arm64' {
                 Copy-Item (Join-Path $utils 'aria2/windows-arm64/aria2c.exe') $binDir -Force
                 Copy-Item (Join-Path $utils '7z/windows-arm64/7za.exe')       $binDir -Force
-                if (Test-Path (Join-Path $utils '7z/windows-arm64/7za.dll'))  { Copy-Item (Join-Path $utils '7z/windows-arm64/7za.dll')  $binDir -Force }
-                if (Test-Path (Join-Path $utils '7z/windows-arm64/7zxa.dll')) { Copy-Item (Join-Path $utils '7z/windows-arm64/7zxa.dll') $binDir -Force }
                 New-BAT -destDir $pkgDir -PartsLines $partsLines -IsoLine $isoLine
               }
               'linux-x64' {
