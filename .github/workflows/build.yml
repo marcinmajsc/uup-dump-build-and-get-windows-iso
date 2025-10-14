@@ -1,4 +1,4 @@
-name: build
+name: Build Windows
 run-name: >
   ${{ inputs.versions }}
   ${{ fromJSON('{"Pro":"PRO","Home":"HOME","Multi":"MULTI"}')[inputs.edition] }}
