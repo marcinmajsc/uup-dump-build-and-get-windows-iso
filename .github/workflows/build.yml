@@ -285,11 +285,11 @@ jobs:
                     
           > [!TIP]
           > For example on windows with 7-Zip:
-          > - Extract (GUI): \`Open **$env:ISO_NAME.zip.001** in 7-Zip and extract.\`
-          > - Extract (CLI): \`7z x $env:ISO_NAME.zip.001\`
+          > - Extract (GUI): ``Open **$env:ISO_NAME.zip.001** in 7-Zip and extract.``
+          > - Extract (CLI): ``7z x $env:ISO_NAME.zip.001``
 
           > [!CAUTION]
-          > Remember on Linux/MacOS set \`chmod +x\` to *.sh file before run!
+          > Remember on Linux/MacOS set ``chmod +x`` to *.sh file before run!
           "@
 
           ((Get-Content $env:GITHUB_STEP_SUMMARY) + "<br/>" + $rlsnfo) | Set-Content summary.md
