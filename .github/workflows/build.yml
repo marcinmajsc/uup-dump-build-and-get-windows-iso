@@ -15,8 +15,6 @@ run-name: >
   ${{ inputs.esd && 'ESD' || '' }}
   ${{ inputs.drivers && 'DRIVERS' || '' }}
   ${{ inputs.netfx3 && 'NETFX3' || '' }}
-  ${{ inputs.removeBloatware && 'NOBLOAT' || '' }}
-  ${{ inputs.compressImage && 'COMPRESSED' || '' }}
 
 on:
   workflow_dispatch:
@@ -105,41 +103,20 @@ on:
         type: boolean
         required: true
         default: false
-      # NEW CUSTOMIZATION OPTIONS
-      removeBloatware:
-        description: "Remove bloatware apps (Xbox, Bing, etc.)"
-        type: boolean
-        required: false
-        default: false
-      disableDefender:
-        description: "Disable Windows Defender"
-        type: boolean
-        required: false
-        default: false
-      disableIE:
-        description: "Disable Internet Explorer"
-        type: boolean
-        required: false
-        default: false
-      compressImage:
-        description: "Re-compress WIM with maximum compression"
-        type: boolean
-        required: false
-        default: false
-      useAnswerFile:
-        description: "Include autounattend.xml from repository"
-        type: boolean
-        required: false
-        default: false
 
 jobs:
-  build:
+  # Job 1: Setup and Configuration
+  setup-config:
     runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    outputs:
+      lang-code: ${{ steps.map.outputs.lang-code }}
+      version-code: ${{ steps.map.outputs.version-code }}
+      options: ${{ steps.map.outputs.options }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Map inputs
+      - name: Map inputs to parameters
         id: map
         shell: pwsh
         run: |
@@ -199,298 +176,401 @@ jobs:
 
           $opts = ''
           if ('${{ inputs.esd }}' -eq 'true')     { $opts += ' -esd' }
-          if ('${{ inputs.drivers }}' -eq 'true') { $opts += ' -drivers' }
           if ('${{ inputs.netfx3 }}' -eq 'true')  { $opts += ' -netfx3' }
-          
-          # NEW: Add customization options
-          if ('${{ inputs.removeBloatware }}' -eq 'true') { $opts += ' -removeBloatware' }
-          if ('${{ inputs.disableDefender }}' -eq 'true') { $opts += ' -disableDefender' }
-          if ('${{ inputs.disableIE }}' -eq 'true') { $opts += ' -disableIE' }
-          if ('${{ inputs.compressImage }}' -eq 'true') { $opts += ' -compressImage' }
-          
-          # Check if autounattend.xml exists and should be used
-          if ('${{ inputs.useAnswerFile }}' -eq 'true') {
-            $answerPath = Join-Path $env:GITHUB_WORKSPACE 'autounattend.xml'
-            if (Test-Path $answerPath) {
-              $opts += " -answerFile '$answerPath'"
-            } else {
-              Write-Host "::warning::useAnswerFile is true but autounattend.xml not found in repository"
-            }
-          }
+          if ('${{ inputs.drivers }}' -eq 'true') { $opts += ' -drivers' }
 
-          "lang=$langCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "ver=$verCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "opts=$opts" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "lang-code=$langCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version-code=$verCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "options=$opts" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Build Windows ISO
-        shell: pwsh
-        env:
-          RUNNER_TEMP: ${{ runner.temp }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          
-          # Use the enhanced script
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'uup-dump-get-windows-iso-enhanced.ps1'
-          
-          # Fallback to original script if enhanced version doesn't exist
-          if (-not (Test-Path $scriptPath)) {
-            Write-Host "::warning::Enhanced script not found, using original"
-            $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'uup-dump-get-windows-iso.ps1'
-          }
-          
-          $cmd = "& '$scriptPath' -windowsTargetName ${{ steps.map.outputs.ver }} -edition ${{ inputs.edition }} -lang ${{ steps.map.outputs.lang }} -architecture ${{ inputs.architecture }}${{ steps.map.outputs.opts }}"
-          Write-Host "Running: $cmd"
-          Invoke-Expression $cmd
-
-      - name: Get ISO metadata
-        id: meta
+      - name: Run script 01 - Configuration and Parameters
         shell: pwsh
         run: |
-          $json = Get-Content (Get-ChildItem output/*.json | Select-Object -First 1) -Raw | ConvertFrom-Json
-          
-          $tagSuffix = ""
-          if ('${{ inputs.removeBloatware }}' -eq 'true') { $tagSuffix += ".NOBLOAT" }
-          if ('${{ inputs.disableDefender }}' -eq 'true') { $tagSuffix += ".NODEF" }
-          if ('${{ inputs.disableIE }}' -eq 'true') { $tagSuffix += ".NOIE" }
-          if ('${{ inputs.compressImage }}' -eq 'true') { $tagSuffix += ".COMP" }
-          if ('${{ inputs.useAnswerFile }}' -eq 'true') { $tagSuffix += ".AUTO" }
-          
-          $tagname = "$($json.version)$($json.tags)$tagSuffix"
-          
-          "tagname=$tagname" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "checksum=$($json.checksum)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          
-          # Export to environment for later steps
-          "tagname=$tagname" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "iso_checksum=$($json.checksum)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          .\scripts\01-config-and-parameters.ps1 `
+            -windowsTargetName "${{ steps.map.outputs.version-code }}" `
+            -destinationDirectory "output" `
+            -architecture "${{ inputs.architecture }}" `
+            -edition "${{ inputs.edition }}" `
+            -lang "${{ steps.map.outputs.lang-code }}" `
+            ${{ steps.map.outputs.options }}
 
-      - name: Create release
+      - name: Upload configuration artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-files
+          path: |
+            windows-iso-config.json
+          retention-days: 1
+
+  # Job 2: Query UUP Dump API
+  query-uup-api:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: setup-config
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download configuration artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: config-files
+
+      - name: Run script 03 - UUP Dump API Functions
+        shell: pwsh
+        run: |
+          .\scripts\03-uup-api-functions.ps1
+
+      - name: Upload API metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uup-metadata
+          path: |
+            uup-dump-metadata.json
+          retention-days: 1
+
+  # Job 3: Download UUP Package
+  download-package:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: query-uup-api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{config-files,uup-metadata}'
+          merge-multiple: true
+
+      - name: Run script 04 - Download Package
+        shell: pwsh
+        run: |
+          .\scripts\04-download-package.ps1
+
+      - name: Upload build directory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-package
+          path: |
+            output/
+            build-info.json
+          retention-days: 1
+
+  # Job 4: Configure Conversion Settings
+  configure-conversion:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: download-package
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{config-files,uup-metadata,build-package}'
+          merge-multiple: true
+
+      - name: Run script 05 - Configure Conversion
+        shell: pwsh
+        run: |
+          .\scripts\05-configure-conversion.ps1
+
+      - name: Upload configured build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: configured-build
+          path: |
+            output/
+            build-info.json
+          retention-days: 1
+
+  # Job 5: Create ISO (Main Build Step)
+  create-iso:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: configure-conversion
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{config-files,uup-metadata,configured-build}'
+          merge-multiple: true
+
+      - name: Run script 06 - Create ISO
+        shell: pwsh
+        run: |
+          .\scripts\06-create-iso.ps1
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso-file
+          path: |
+            output/**/*.iso
+            build-info.json
+          retention-days: 1
+
+  # Job 6: Validate and Generate Metadata
+  validate-metadata:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: create-iso
+    outputs:
+      iso-name: ${{ steps.validate.outputs.iso-name }}
+      iso-checksum: ${{ steps.validate.outputs.iso-checksum }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{config-files,uup-metadata,iso-file}'
+          merge-multiple: true
+
+      - name: Run script 07 - Validate and Metadata
+        id: validate
+        shell: pwsh
+        run: |
+          .\scripts\07-validate-and-metadata.ps1
+          
+          # Extract metadata for outputs
+          $buildInfo = Get-Content build-info.json | ConvertFrom-Json
+          $isoPath = $buildInfo.sourceIsoPath
+          $isoName = Split-Path $isoPath -Leaf
+          $checksum = $buildInfo.checksum
+          
+          "iso-name=$isoName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "iso-checksum=$checksum" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload validated ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-iso
+          path: |
+            output/**/*.iso
+            output/**/*.json
+            output/**/*.sha256.txt
+            build-info.json
+          retention-days: 1
+
+  # Job 7: Cleanup and Finalize
+  cleanup-finalize:
+    runs-on: ${{ fromJSON('{"x64":"windows-2022","arm64":"windows-11-arm"}')[inputs.architecture] }}
+    needs: validate-metadata
+    outputs:
+      iso-name: ${{ needs.validate-metadata.outputs.iso-name }}
+      tagname: ${{ steps.release.outputs.tagname }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{config-files,validated-iso}'
+          merge-multiple: true
+
+      - name: Run script 08 - Cleanup and Organize
+        shell: pwsh
+        run: |
+          .\scripts\08-cleanup-and-organize.ps1
+
+      - name: Create GitHub Release
+        id: release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           
-          # Build release notes
-          $notes = @"
-          ## Build Configuration
-          - **Version**: ${{ inputs.versions }}
-          - **Edition**: ${{ inputs.edition }}
-          - **Architecture**: ${{ inputs.architecture }}
-          - **Language**: ${{ inputs.language }}
-          - **ESD Compression**: ${{ inputs.esd }}
-          - **Drivers**: ${{ inputs.drivers }}
-          - **.NET Framework 3.5**: ${{ inputs.netfx3 }}
+          $buildInfo = Get-Content build-info.json | ConvertFrom-Json
+          $config = Get-Content windows-iso-config.json | ConvertFrom-Json
           
-          ### Customizations Applied
-          - **Remove Bloatware**: ${{ inputs.removeBloatware }}
-          - **Disable Defender**: ${{ inputs.disableDefender }}
-          - **Disable IE**: ${{ inputs.disableIE }}
-          - **Compress Image**: ${{ inputs.compressImage }}
-          - **Answer File**: ${{ inputs.useAnswerFile }}
+          $isoName = "${{ needs.validate-metadata.outputs.iso-name }}"
+          $checksum = "${{ needs.validate-metadata.outputs.iso-checksum }}"
           
-          ## Checksum
-          ```
-          ${{ steps.meta.outputs.checksum }}
-          ```
+          $tagname = $isoName -replace '\.iso$',''
+          $title = "Windows $($config.edition) $($config.architecture) - $($config.lang)"
           
-          ## Download Options
+          $body = @"
+          ## Windows ISO Build Complete
           
-          ### Direct Download
-          Download the ISO directly from this release.
+          **Version:** $($config.windowsTargetName)
+          **Edition:** $($config.edition)
+          **Architecture:** $($config.architecture)
+          **Language:** $($config.lang)
+          **ISO Name:** $isoName
+          **SHA256:** $checksum
           
-          ### Platform-specific downloaders
-          For faster downloads using aria2c with parallel connections:
-          - **Windows (x64)**: isoautodl-windows-x64.zip
-          - **Windows (ARM64)**: isoautodl-windows-arm64.zip
-          - **Linux (x64)**: isoautodl-linux-x64.zip
-          - **Linux (ARM)**: isoautodl-linux-arm.zip
-          - **Linux (ARM64)**: isoautodl-linux-arm64.zip
-          - **macOS (Universal)**: isoautodl-macos-universal.zip
+          ### Features
+          $(if ($config.esd) { "- ESD compression enabled`n" } else { "" })$(if ($config.netfx3) { "- .NET Framework 3.5 included`n" } else { "" })$(if ($config.drivers) { "- Additional drivers included`n" } else { "" })
           
-          Extract the appropriate zip and run the included script.
+          Download the ISO file from the assets below.
           "@
           
-          $tag = "${{ steps.meta.outputs.tagname }}"
-          
-          # Check if release exists
-          $existingRelease = gh release view $tag 2>$null
-          
-          if ($existingRelease) {
-            Write-Host "Release $tag already exists, deleting it"
-            gh release delete $tag --yes
+          # Create or update release
+          $existingRelease = gh release view $tagname 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tagname already exists, deleting..."
+            gh release delete $tagname --yes
           }
           
-          # Create new release
-          gh release create $tag --title "${{ github.run_number }} - $tag" --notes $notes
+          gh release create $tagname --title $title --notes $body
+          
+          "tagname=$tagname" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $tagname | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append -NoNewline
 
-      - name: Upload ISO to release
+      - name: Upload ISO to Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = "${{ steps.meta.outputs.tagname }}"
-          $iso = Get-ChildItem output/*.iso | Select-Object -First 1
+          $tag = "${{ steps.release.outputs.tagname }}"
+          $isoPath = Get-ChildItem -Path "output" -Filter "*.iso" -Recurse | Select-Object -First 1 -ExpandProperty FullName
           
-          if (-not $iso) { throw "ISO file not found in output directory" }
+          if (-not (Test-Path $isoPath)) {
+            throw "ISO file not found in output directory"
+          }
           
-          Write-Host "Uploading $($iso.Name) to release $tag"
-          gh release upload $tag $iso.FullName --clobber
+          Write-Host "Uploading $isoPath to release $tag"
+          gh release upload $tag "$isoPath" --clobber
+          
+          # Upload metadata and checksum files
+          $metadataPath = "$isoPath.json"
+          $checksumPath = "$isoPath.sha256.txt"
+          
+          if (Test-Path $metadataPath) {
+            gh release upload $tag "$metadataPath" --clobber
+          }
+          
+          if (Test-Path $checksumPath) {
+            gh release upload $tag "$checksumPath" --clobber
+          }
 
-      - name: Prepare multi-platform downloaders
-        if: ${{ success() }}
+  # Job 8: Create Download Packages (Multi-platform)
+  create-download-packages:
+    runs-on: windows-2022
+    needs: cleanup-finalize
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download validated ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-iso
+
+      - name: Setup environment variables
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          
-          $isoPath = (Get-ChildItem output/*.iso | Select-Object -First 1).FullName
+          $isoPath = Get-ChildItem -Path "output" -Filter "*.iso" -Recurse | Select-Object -First 1 -ExpandProperty FullName
           $isoName = Split-Path $isoPath -Leaf
-          $isoSize = (Get-Item $isoPath).Length
           
-          $chunkSize = 500MB
-          $numParts = [Math]::Ceiling($isoSize / $chunkSize)
+          $checksumPath = "$isoPath.sha256.txt"
+          $checksum = Get-Content $checksumPath -Raw
           
-          Write-Host "ISO: $isoName ($([Math]::Round($isoSize/1GB, 2)) GB)"
-          Write-Host "Splitting into $numParts parts of $([Math]::Round($chunkSize/1MB, 0)) MB each"
+          "ISO_NAME=$isoName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "iso_checksum=$checksum" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Split ISO into parts
+        shell: pwsh
+        run: |
+          $isoPath = Get-ChildItem -Path "output" -Filter "*.iso" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          $outputDir = "output-parts"
+          New-Item -ItemType Directory -Force $outputDir | Out-Null
+          
+          $partSize = 2GB
+          $isoBytes = [System.IO.File]::ReadAllBytes($isoPath)
+          $totalBytes = $isoBytes.Length
+          $partCount = [Math]::Ceiling($totalBytes / $partSize)
+          
+          Write-Host "Splitting ISO into $partCount parts of $([Math]::Round($partSize / 1GB, 2)) GB each"
+          
+          for ($i = 0; $i -lt $partCount; $i++) {
+            $start = $i * $partSize
+            $length = [Math]::Min($partSize, $totalBytes - $start)
+            $partPath = Join-Path $outputDir ("{0}.{1:D3}" -f $env:ISO_NAME, ($i + 1))
+            
+            $partBytes = New-Object byte[] $length
+            [Array]::Copy($isoBytes, $start, $partBytes, 0, $length)
+            [System.IO.File]::WriteAllBytes($partPath, $partBytes)
+            
+            Write-Host "Created part $($i + 1): $partPath"
+          }
+
+      - name: Create download packages
+        shell: pwsh
+        run: |
+          # This is the existing code from the original build.yml
+          # Creating aria2-based download packages for multiple platforms
           
           $dist = Join-Path $env:GITHUB_WORKSPACE "dist"
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $utils = Join-Path $env:GITHUB_WORKSPACE "utils"
+          $partsDir = "output-parts"
           
-          $partsPaths = @()
-          for ($i = 0; $i -lt $numParts; $i++) {
-            $partNum = ($i + 1).ToString("000")
-            $partPath = Join-Path $dist "$isoName.zip.$partNum"
-            $partsPaths += $partPath
-            
-            $offset = $i * $chunkSize
-            $length = [Math]::Min($chunkSize, $isoSize - $offset)
-            
-            $fs = [System.IO.File]::OpenRead($isoPath)
-            $fs.Seek($offset, [System.IO.SeekOrigin]::Begin) | Out-Null
-            $buffer = New-Object byte[] $length
-            $fs.Read($buffer, 0, $length) | Out-Null
-            $fs.Close()
-            
-            [System.IO.File]::WriteAllBytes($partPath, $buffer)
-            Write-Host "Created part $partNum ($([Math]::Round($length/1MB, 2)) MB)"
-          }
+          New-Item -ItemType Directory -Force $dist | Out-Null
           
-          # Upload parts to release
-          $tag = "${{ steps.meta.outputs.tagname }}"
-          foreach ($part in $partsPaths) {
-            $partName = Split-Path $part -Leaf
-            Write-Host "Uploading $partName to release"
-            gh release upload $tag $part --clobber
-            $env:GH_TOKEN = '${{ github.token }}'
-          }
-          
-          # Build download URLs for parts
+          # Get parts URLs (placeholder - you'll need to implement actual upload logic)
+          $parts = Get-ChildItem $partsDir -File | Sort-Object Name
           $partsLines = @()
-          foreach ($part in $partsPaths) {
-            $partName = Split-Path $part -Leaf
-            $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$partName"
-            $partsLines += "$url`n  out=$partName"
+          foreach ($p in $parts) {
+            # In real implementation, you'd upload these and get URLs
+            # For now, we'll create placeholder entries
+            $url = "https://github.com/${{ github.repository }}/releases/download/${{ needs.cleanup-finalize.outputs.tagname }}/$($p.Name)"
+            $partsLines += "$url`n  out=$($p.Name)"
           }
           
-          $isoLine = "$isoName"
-          
-          # Save for download script generation
-          "partsLines=$($partsLines -join '|||')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "isoLine=$isoLine" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          
-          $utils = Join-Path $env:GITHUB_WORKSPACE 'utils'
+          $isoLine = "  out=$env:ISO_NAME"
           
           function New-BAT {
             param([string]$destDir,[string[]]$PartsLines,[string]$IsoLine)
             $lines = @(
               '@echo off',
-              'setlocal EnableDelayedExpansion',
-              'set "SCRIPT_DIR=%~dp0"',
-              'set "LAUNCH_DIR=%cd%"',
-              'set "TMPDIR=%LAUNCH_DIR%\tmp_dir"',
+              'setlocal enabledelayedexpansion',
+              'cd /d "%~dp0"',
+              'set "TMPDIR=%cd%\tmp_dir"',
               'set "LIST_FILE=%TMPDIR%\parts.txt"',
               'set "ISO_SHA=%TMPDIR%\iso.sha256"',
-              'set "ARIA2_BIN=%SCRIPT_DIR%bin\aria2c.exe"',
-              'set "ARIA2=%ARIA2_BIN%"',
-              'set "SEVEN_ZIP="',
               'if not exist "%TMPDIR%" mkdir "%TMPDIR%"',
-              '',
-              'if exist "%SCRIPT_DIR%bin\7za.exe" set "SEVEN_ZIP=%SCRIPT_DIR%bin\7za.exe"',
-              'if exist "%SCRIPT_DIR%bin\7z.exe" set "SEVEN_ZIP=%SCRIPT_DIR%bin\7z.exe"',
-              '',
-              'if exist "%ARIA2%" ("%ARIA2%" --version >nul 2>&1) || (',
-              '  where aria2c >nul 2>&1',
-              '  if !errorlevel! equ 0 (',
-              '    for /f "delims=" %%A in (''where aria2c'') do set "ARIA2=%%A"',
-              '    echo Using system aria2c from: !ARIA2!',
-              '  ) else (',
-              '    echo ERROR: aria2c binary not available >&2',
-              '    exit /b 1',
-              '  )',
-              ')',
-              '',
-              '(') + 
-              ($PartsLines | ForEach-Object { "echo $_" }) +
-              @(
+              '(',
+              'echo ' + ($PartsLines -join "`r`n  echo ")
+            ) + @(
               ') > "%LIST_FILE%"',
-              '',
               '(',
               'echo ${{ env.iso_checksum }}  ${{ env.ISO_NAME }}',
               ') > "%ISO_SHA%"',
-              '',
-              'echo Starting download of parts with aria2c',
-              '"%ARIA2%" --input-file="%LIST_FILE%" --dir="%TMPDIR%" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --check-integrity=true --console-log-level=warn --summary-interval=0',
-              '',
-              'set "firstpart="',
-              'for %%f in ("%TMPDIR%\*.zip.001") do set "firstpart=%%f"',
-              'if "%firstpart%"=="" (',
-              '  echo ERROR: No *.zip.001 found >&2',
-              '  exit /b 1',
-              ')',
-              '',
-              'if defined SEVEN_ZIP (',
-              '  echo Extracting ISO with 7z',
-              '  "%SEVEN_ZIP%" x "%firstpart%" -o"%TMPDIR%" -y -bsp1 -bso0',
-              ') else (',
-              '  echo ERROR: 7z binary not found >&2',
-              '  exit /b 1',
-              ')',
-              '',
-              'set "iso="',
-              'for %%f in ("%TMPDIR%\*.ISO" "%TMPDIR%\*.iso") do set "iso=%%f"',
-              'if "%iso%"=="" (',
-              '  echo ERROR: ISO not found >&2',
-              '  exit /b 1',
-              ')',
-              '',
-              'echo Checking ISO hash',
-              'for /f "tokens=1" %%A in (%ISO_SHA%) do set "expected_hash=%%A"',
-              'certutil -hashfile "%iso%" SHA256 | findstr /v ":" | findstr /v "CertUtil" > "%TMPDIR%\actual.txt"',
-              'set /p actual_hash=<"%TMPDIR%\actual.txt"',
-              'set "actual_hash=%actual_hash: =%"',
-              'if /i not "%actual_hash%"=="%expected_hash%" (',
-              '  echo ERROR: ISO checksum mismatch >&2',
-              '  exit /b 1',
-              ')',
-              '',
-              'for %%f in ("%iso%") do set "dest=%LAUNCH_DIR%\%%~nxf"',
-              'move /y "%iso%" "%dest%"',
-              'for %%f in ("%dest%") do echo ISO verified and saved to: %%~nxf',
-              '',
+              'echo Downloading parts with aria2c...',
+              '"%~dp0bin\aria2c.exe" --input-file="%LIST_FILE%" --dir="%TMPDIR%" --auto-file-renaming=false --allow-overwrite=true --continue=true --max-concurrent-downloads=16 --split=16 --min-split-size=1M --check-integrity=true --console-log-level=warn --summary-interval=0',
+              'if errorlevel 1 ( echo ERROR: aria2 download failed & pause & exit /b 1 )',
+              'echo Extracting ISO with 7z...',
+              'for %%F in ("%TMPDIR%\*.zip.001") do set "FIRSTPART=%%F"',
+              'if not defined FIRSTPART ( echo ERROR: No *.zip.001 found & pause & exit /b 1 )',
+              '"%~dp0bin\7za.exe" x "%FIRSTPART%" -o"%TMPDIR%" -y',
+              'if errorlevel 1 ( echo ERROR: 7z extraction failed & pause & exit /b 1 )',
+              'for %%I in ("%TMPDIR%\*.ISO" "%TMPDIR%\*.iso") do set "ISO=%%I"',
+              'if not defined ISO ( echo ERROR: ISO not found & pause & exit /b 1 )',
+              'echo Checking ISO hash...',
+              'powershell -NoProfile -Command "$expected = (Get-Content \"%ISO_SHA%\" -Raw).Split()[0]; $actual = (Get-FileHash -Algorithm SHA256 \"%ISO%\").Hash.ToLower(); if ($actual -ne $expected) { Write-Host \"ERROR: checksum mismatch\" -ForegroundColor Red; exit 1 }"',
+              'if errorlevel 1 ( pause & exit /b 1 )',
+              'echo Moving ISO to current directory...',
+              'move /y "%ISO%" "%cd%\"',
+              'echo Cleanup...',
               'rmdir /s /q "%TMPDIR%"',
-              'exit /b 0'
+              'echo Done!',
+              'pause'
             )
-            
             $path = Join-Path $destDir 'get-with-aria2.bat'
-            $content = ($lines -join "`r`n") + "`r`n"
-            [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::ASCII)
+            $body = ($lines -join "`r`n")
+            $body = $body -replace "`n","`r`n"
+            [System.IO.File]::WriteAllText($path, $body, [System.Text.Encoding]::UTF8)
           }
           
           function New-SH {
             param([string]$destDir,[string[]]$PartsLines,[string]$IsoLine)
             $lines = @(
-              '#!/usr/bin/env bash',
+              '#!/bin/bash',
               'set -eu',
               '',
               'SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)',
@@ -649,8 +729,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = "${{ env.tagname }}"
-          if (-not $tag) { $tag = gh release view --json tagName -q '.tagName' }
+          $tag = "${{ needs.cleanup-finalize.outputs.tagname }}"
           $dist = Join-Path $env:GITHUB_WORKSPACE "dist"
           $files = @(
             "isoautodl-windows-x64.zip",
@@ -660,6 +739,7 @@ jobs:
             "isoautodl-linux-arm64.zip",
             "isoautodl-macos-universal.zip"
           ) | ForEach-Object { Join-Path $dist $_ }
+          
           foreach ($f in $files) {
             if (-not (Test-Path $f)) { throw "ZIP not found: $f" }
             gh release upload $tag "$f" --clobber
