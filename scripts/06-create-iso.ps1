@@ -11,7 +11,7 @@ $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
 
 # Import helper functions
-. .\02-helper-functions.ps1
+. "$PSScriptRoot\02-helper-functions.ps1"
 
 # Load build info
 if (-not (Test-Path $buildInfoPath)) {
