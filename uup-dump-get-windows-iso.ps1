@@ -9,7 +9,15 @@ param(
   [string]$lang = "en-us",
   [switch]$esd,
   [switch]$drivers,
-  [switch]$netfx3
+  [switch]$netfx3,
+  # NEW PARAMETERS FOR CUSTOMIZATION
+  [string]$answerFile,           # Path to autounattend.xml
+  [switch]$removeBloatware,      # Remove common bloatware apps
+  [switch]$disableDefender,      # Disable Windows Defender
+  [switch]$disableIE,            # Disable Internet Explorer
+  [string[]]$removeApps,         # Custom list of apps to remove
+  [string[]]$disableFeatures,    # Custom list of features to disable
+  [switch]$compressImage         # Re-compress WIM with max compression
 )
 
 Set-StrictMode -Version Latest
@@ -194,50 +202,47 @@ L4: Got langs=$($langs -join ',')."
       $editions = $_.Value.editions.PSObject.Properties.Name
       $res = $true
 
-      $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
-      if ($ringLower) {
-        $actual = ($_.Value.info.ring).ToUpper()
-        if ($ringLower -in @('dev','beta')) {
-          if ($actual -notin @($expectedRing, 'WIF', 'WIS')) {
-            Write-CleanLine "Skipping.
-L5: Expected ring match for $expectedRing, WIS or WIF. Got ring=$actual."
-            $res = $false
-          }
-        } else {
-          if ($actual -ne $expectedRing) {
-            Write-CleanLine "Skipping. Expected ring match for $expectedRing. Got ring=$actual."
-            $res = $false
-          }
+      if ($target.PSObject.Properties.Name -contains 'ring' -and $target.ring) {
+        $ok = $_.Value.info.ring -eq $target.ring
+        if (-not $ok) {
+          Write-CleanLine "Skipping.
+L5: Expected ring=$($target.ring).
+L6: Got ring=$($_.Value.info.ring)."
         }
+        $res = $res -and $ok
       }
 
       if ($langs -notcontains $lang) {
-        Write-CleanLine "Skipping. Expected langs=$lang. Got langs=$($langs -join ',')."
         $res = $false
       }
 
-      if ((Get-EditionName $edition) -eq "Multi") {
-        if (($editions -notcontains "Professional") -and ($editions -notcontains "Core")) {
+      if ($target.edition -eq "Multi") {
+        $ok = ($editions -contains "core") -and ($editions -contains "professional")
+        if (-not $ok) {
           Write-CleanLine "Skipping.
-L6: Expected editions=Multi (Professional/Core). Got editions=$($editions -join ',')."
-          $res = $false
+L7: Expected editions=core,professional.
+L8: Got editions=$($editions -join ',')."
         }
-      } elseif ($editions -notcontains (Get-EditionName $edition)) {
-        Write-CleanLine ("Skipping. Expected editions={0}.
-L7: Got editions={1}." -f (Get-EditionName $edition), ($editions -join ','))
-        $res = $false
+        $res = $res -and $ok
+      } else {
+        $ok = $editions -contains $target.edition
+        if (-not $ok) {
+          Write-CleanLine "Skipping.
+L9: Expected editions=$($target.edition).
+L10: Got editions=$($editions -join ',')."
+        }
+        $res = $res -and $ok
       }
 
-      $res
+      return $res
     }
   | Select-Object -First 1
   | ForEach-Object {
       $id = $_.Value.uuid
       [PSCustomObject]@{
-        name               = $name
+        id                 = $id
         title              = $_.Value.title
         build              = $_.Value.build
-        id                 = $id
         edition            = $target.edition
         virtualEdition     = $target['virtualEdition']
         apiUrl             = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ id = $id; lang = $lang; edition = if ($edition -eq "multi") { "core;professional" } else { $target.edition } })
@@ -263,6 +268,178 @@ function Get-IsoWindowsImages($isoPath) {
   finally {
     Write-CleanLine "Dismounting $isoPath"
     Dismount-DiskImage $isoPath | Out-Null
+  }
+}
+
+# ------------------------------
+# NEW: Image Customization Functions
+# ------------------------------
+function Invoke-ImageCustomization {
+  param(
+    [string]$IsoPath,
+    [string]$WorkDirectory
+  )
+  
+  Write-CleanLine "=== Starting Image Customization ==="
+  
+  # Create working directories
+  $extractPath = Join-Path $WorkDirectory "extracted_iso"
+  $mountPath = Join-Path $WorkDirectory "mount"
+  $customIsoPath = Join-Path $WorkDirectory "custom.iso"
+  
+  New-Item -Path $extractPath -ItemType Directory -Force | Out-Null
+  New-Item -Path $mountPath -ItemType Directory -Force | Out-Null
+  
+  try {
+    # Extract ISO contents
+    Write-CleanLine "Extracting ISO contents..."
+    $isoImage = Mount-DiskImage $IsoPath -PassThru
+    $isoVolume = $isoImage | Get-Volume
+    Copy-Item -Path "$($isoVolume.DriveLetter):\*" -Destination $extractPath -Recurse -Force
+    Dismount-DiskImage $IsoPath | Out-Null
+    
+    # Get install.wim path
+    $wimPath = if ($esd) {
+      Join-Path $extractPath "sources\install.esd"
+    } else {
+      Join-Path $extractPath "sources\install.wim"
+    }
+    
+    # For ESD files, we need to export to WIM first for editing
+    if ($esd) {
+      Write-CleanLine "Converting ESD to WIM for customization..."
+      $tempWim = Join-Path $extractPath "sources\install_temp.wim"
+      Export-WindowsImage -SourceImagePath $wimPath -SourceIndex 1 -DestinationImagePath $tempWim -CompressionType max
+      $wimPath = $tempWim
+    }
+    
+    # Get number of images in WIM
+    $images = Get-WindowsImage -ImagePath $wimPath
+    
+    # Process each image index
+    foreach ($img in $images) {
+      Write-CleanLine "Customizing image $($img.ImageIndex): $($img.ImageName)"
+      
+      # Mount the image
+      Write-CleanLine "Mounting image $($img.ImageIndex)..."
+      Mount-WindowsImage -ImagePath $wimPath -Index $img.ImageIndex -Path $mountPath
+      
+      try {
+        # Remove bloatware
+        if ($removeBloatware -or $removeApps) {
+          Write-CleanLine "Removing bloatware apps..."
+          
+          $defaultBloatware = @(
+            "*Xbox*",
+            "*Zune*",
+            "*Bing*",
+            "*MicrosoftOfficeHub*",
+            "*SkypeApp*",
+            "*Solitaire*",
+            "*Candy*",
+            "*MarchofEmpires*",
+            "*BubbleWitch*",
+            "*Disney*",
+            "*Facebook*",
+            "*Twitter*",
+            "*Spotify*",
+            "*LinkedInforWindows*",
+            "*MinecraftUWP*"
+          )
+          
+          $appsToRemove = if ($removeApps) { $removeApps } else { $defaultBloatware }
+          
+          foreach ($app in $appsToRemove) {
+            Get-AppxProvisionedPackage -Path $mountPath | 
+              Where-Object { $_.DisplayName -like $app } | 
+              ForEach-Object {
+                Write-CleanLine "  Removing: $($_.DisplayName)"
+                Remove-AppxProvisionedPackage -Path $mountPath -PackageName $_.PackageName
+              }
+          }
+        }
+        
+        # Disable Windows Defender
+        if ($disableDefender) {
+          Write-CleanLine "Disabling Windows Defender..."
+          Disable-WindowsOptionalFeature -Path $mountPath -FeatureName "Windows-Defender" -Remove -NoRestart -ErrorAction SilentlyContinue
+        }
+        
+        # Disable Internet Explorer
+        if ($disableIE) {
+          Write-CleanLine "Disabling Internet Explorer..."
+          Disable-WindowsOptionalFeature -Path $mountPath -FeatureName "Internet-Explorer-Optional-amd64" -Remove -NoRestart -ErrorAction SilentlyContinue
+        }
+        
+        # Disable custom features
+        if ($disableFeatures) {
+          foreach ($feature in $disableFeatures) {
+            Write-CleanLine "Disabling feature: $feature"
+            Disable-WindowsOptionalFeature -Path $mountPath -FeatureName $feature -Remove -NoRestart -ErrorAction SilentlyContinue
+          }
+        }
+        
+        # Cleanup to reduce size
+        Write-CleanLine "Running component cleanup..."
+        Repair-WindowsImage -Path $mountPath -StartComponentCleanup -ResetBase
+        
+      } finally {
+        # Unmount and save changes
+        Write-CleanLine "Saving changes to image $($img.ImageIndex)..."
+        Dismount-WindowsImage -Path $mountPath -Save
+      }
+    }
+    
+    # Compress the WIM if requested
+    if ($compressImage) {
+      Write-CleanLine "Compressing WIM with maximum compression..."
+      $compressedWim = Join-Path $extractPath "sources\install_compressed.wim"
+      Export-WindowsImage -SourceImagePath $wimPath -SourceIndex 1 -DestinationImagePath $compressedWim -CompressionType max
+      
+      # Export remaining images if multiple exist
+      if ($images.Count -gt 1) {
+        for ($i = 2; $i -le $images.Count; $i++) {
+          Export-WindowsImage -SourceImagePath $wimPath -SourceIndex $i -DestinationImagePath $compressedWim -CompressionType max
+        }
+      }
+      
+      Remove-Item $wimPath
+      Move-Item $compressedWim $wimPath
+    }
+    
+    # Add answer file if provided
+    if ($answerFile -and (Test-Path $answerFile)) {
+      Write-CleanLine "Adding answer file to ISO..."
+      Copy-Item $answerFile -Destination (Join-Path $extractPath "autounattend.xml")
+    }
+    
+    # Rebuild the ISO
+    Write-CleanLine "Rebuilding ISO..."
+    $oscdimg = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
+    
+    if (Test-Path $oscdimg) {
+      $bootData = Join-Path $extractPath "boot\etfsboot.com"
+      $efiSys = Join-Path $extractPath "efi\microsoft\boot\efisys.bin"
+      
+      & $oscdimg -m -o -u2 -udfver102 -bootdata:2#p0,e,b"$bootData"#pEF,e,b"$efiSys" $extractPath $customIsoPath
+      
+      if ($LASTEXITCODE -eq 0) {
+        Write-CleanLine "Custom ISO created successfully at: $customIsoPath"
+        return $customIsoPath
+      } else {
+        throw "oscdimg failed with exit code $LASTEXITCODE"
+      }
+    } else {
+      Write-CleanLine "WARNING: oscdimg.exe not found. Install Windows ADK to rebuild ISO."
+      Write-CleanLine "Modified files are in: $extractPath"
+      return $null
+    }
+    
+  } finally {
+    # Cleanup
+    if (Test-Path $mountPath) {
+      Remove-Item -Path $mountPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 
@@ -404,6 +581,22 @@ function Get-WindowsIso($name, $destinationDirectory) {
   $sourceIsoPath = Resolve-Path $buildDirectory/*.iso
   $IsoName = Split-Path $sourceIsoPath -leaf
 
+  # NEW: Perform customization if requested
+  $needsCustomization = $removeBloatware -or $disableDefender -or $disableIE -or $removeApps -or $disableFeatures -or $answerFile -or $compressImage
+  
+  if ($needsCustomization) {
+    Write-CleanLine "=== Customization Requested ==="
+    $customWorkDir = Join-Path $buildDirectory "customization_work"
+    $customIsoPath = Invoke-ImageCustomization -IsoPath $sourceIsoPath -WorkDirectory $customWorkDir
+    
+    if ($customIsoPath -and (Test-Path $customIsoPath)) {
+      # Replace original ISO with customized one
+      Remove-Item $sourceIsoPath
+      $sourceIsoPath = $customIsoPath
+      $IsoName = "CUSTOM_" + (Split-Path $sourceIsoPath -Leaf)
+    }
+  }
+
   Write-CleanLine "Getting the $sourceIsoPath checksum"
   $isoChecksum = (Get-FileHash -Algorithm SHA256 $sourceIsoPath).Hash.ToLowerInvariant()
   Set-Content -Encoding ascii -NoNewline -Path $destinationIsoChecksumPath -Value $isoChecksum
@@ -418,6 +611,15 @@ function Get-WindowsIso($name, $destinationDirectory) {
       tags    = $tag
       checksum = $isoChecksum
       images  = @($windowsImages)
+      customization = @{
+        removedBloatware = $removeBloatware.IsPresent
+        disabledDefender = $disableDefender.IsPresent
+        disabledIE = $disableIE.IsPresent
+        customAppsRemoved = ($removeApps -ne $null)
+        customFeaturesDisabled = ($disableFeatures -ne $null)
+        hasAnswerFile = ($answerFile -ne $null -and (Test-Path $answerFile))
+        compressed = $compressImage.IsPresent
+      }
       uupDump = @{
         id                 = $iso.id
         apiUrl             = $iso.apiUrl
