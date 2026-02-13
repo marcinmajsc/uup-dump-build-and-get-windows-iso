@@ -38,7 +38,14 @@ New-Item -ItemType Directory -Force $buildDirectory | Out-Null
 # Determine edition name
 $isoHasEdition = $iso.PSObject.Properties.Name -contains 'edition' -and $iso.edition
 $hasVirtualMember = $iso.PSObject.Properties.Name -contains 'virtualEdition' -and $iso.virtualEdition
-$targetConfig = $config.targets.$name
+
+# Convert targets to hashtable
+$targetsHash = @{}
+$config.targets.PSObject.Properties | ForEach-Object {
+  $targetsHash[$_.Name] = $_.Value
+}
+
+$targetConfig = $targetsHash[$name]
 $effectiveEdition = if ($isoHasEdition) { $iso.edition } else { $targetConfig.edition }
 
 $edn = if ($hasVirtualMember) { $iso.virtualEdition } else { $effectiveEdition }

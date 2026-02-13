@@ -49,7 +49,7 @@ function Get-UupDumpIso($name, $target) {
   Write-CleanLine "Getting the $name metadata"
   $result = Invoke-UupDumpApi listid @{ search = $target.search }
 
-  $result.response.builds.PSObject.Properties `
+  $selectedBuild = $result.response.builds.PSObject.Properties `
   | ForEach-Object {
       $id = $_.Value.uuid
       $uupDumpUrl = 'https://uupdump.net/selectlang.php?' + (New-QueryString @{ id = $id })
@@ -114,46 +114,61 @@ function Get-UupDumpIso($name, $target) {
 
       $res
     } `
-  | Select-Object -First 1 `
-  | ForEach-Object {
-      $id = $_.Value.uuid
-      [PSCustomObject]@{
-        id                 = $id
-        build              = $_.Value.build
-        title              = $_.Value.title
-        edition            = $target['edition']
-        virtualEdition     = $target['virtualEdition']
-        apiUrl             = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ 
-          id = $id
-          lang = $config.lang
-          edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
-        })
-        downloadUrl        = 'https://uupdump.net/download.php?' + (New-QueryString @{ 
-          id = $id
-          pack = $config.lang
-          edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
-        })
-        downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ 
-          id = $id
-          pack = $config.lang
-          edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
-        })
-      }
-    }
+  | Select-Object -First 1
+
+  if (-not $selectedBuild) {
+    return $null
+  }
+
+  $id = $selectedBuild.Value.uuid
+  [PSCustomObject]@{
+    id                 = $id
+    build              = $selectedBuild.Value.build
+    title              = $selectedBuild.Value.title
+    edition            = $target['edition']
+    virtualEdition     = $target['virtualEdition']
+    apiUrl             = 'https://api.uupdump.net/get.php?' + (New-QueryString @{ 
+      id = $id
+      lang = $config.lang
+      edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
+    })
+    downloadUrl        = 'https://uupdump.net/download.php?' + (New-QueryString @{ 
+      id = $id
+      pack = $config.lang
+      edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
+    })
+    downloadPackageUrl = 'https://uupdump.net/get.php?' + (New-QueryString @{ 
+      id = $id
+      pack = $config.lang
+      edition = if ($config.edition -eq "multi") { "core;professional" } else { $target.edition } 
+    })
+  }
 }
 
 # Main execution
 Write-Host "Querying UUP Dump API for: $($config.windowsTargetName)"
 
-$targetConfig = $config.targets.($config.windowsTargetName)
+# Convert targets PSObject to hashtable for easier access
+$targetsHash = @{}
+$config.targets.PSObject.Properties | ForEach-Object {
+  $targetsHash[$_.Name] = $_.Value
+}
+
+$targetConfig = $targetsHash[$config.windowsTargetName]
 if (-not $targetConfig) {
   throw "Unknown Windows target: $($config.windowsTargetName)"
 }
 
-$iso = Get-UupDumpIso $config.windowsTargetName $targetConfig
+# Convert targetConfig PSObject to hashtable
+$targetConfigHash = @{}
+$targetConfig.PSObject.Properties | ForEach-Object {
+  $targetConfigHash[$_.Name] = $_.Value
+}
+
+$iso = Get-UupDumpIso $config.windowsTargetName $targetConfigHash
 
 if (-not $iso) {
-  throw "Can't find UUP for $($config.windowsTargetName) ($($targetConfig.search)), lang=$($config.lang)."
+  throw "Can't find UUP for $($config.windowsTargetName) ($($targetConfigHash.search)), lang=$($config.lang)."
 }
 
 # Save ISO metadata
