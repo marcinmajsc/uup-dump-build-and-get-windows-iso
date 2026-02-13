@@ -11,7 +11,7 @@ $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
 
 # Import helper functions
-. "$PSScriptRoot\02-helper-functions.ps1"
+Import-Module "$PSScriptRoot\HelperFunctions.psm1" -Force
 
 # Load configuration
 if (-not (Test-Path $configPath)) {
