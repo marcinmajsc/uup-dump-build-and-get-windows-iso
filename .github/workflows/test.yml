@@ -1,105 +1,235 @@
-name: Build Windows Test
-run-name: ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.architecture }} ${{ inputs.language }}
+name: Build Configuration
 
 on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
   workflow_dispatch:
     inputs:
-      architecture:
-        description: "Windows architecture to build"
-        type: choice
-        options: [x64, arm64]
-        default: x64
-      versions:
-        description: "Windows version to build"
+      windows_target:
+        description: 'Windows target to build'
+        required: true
+        default: 'windows-11'
         type: choice
         options:
-          - Windows 10 22H2
-          - Windows 11 23H2
-          - Windows 11 24H2
-          - Windows 11 24H2 BETA
-          - Windows 11 25H2
-          - Windows 11 DEV
-          - Windows 11 CANARY
-        default: Windows 11 25H2
+          - windows-10
+          - windows-11old
+          - windows-11
+          - windows-11new
+          - windows-11beta
+          - windows-11dev
+          - windows-11canary
+      architecture:
+        description: 'Architecture'
+        required: true
+        default: 'x64'
+        type: choice
+        options:
+          - x64
+          - arm64
       edition:
-        description: "Windows edition to build"
+        description: 'Edition'
+        required: true
+        default: 'pro'
         type: choice
-        options: [Pro, Home, Multi]
-        default: Pro
+        options:
+          - pro
+          - core
+          - multi
+          - home
       language:
-        description: "Language"
-        type: choice
-        default: English (United States)
-      esd:
-        description: "Use ESD compression"
-        type: boolean
-        default: false
-      netfx3:
-        description: "Add .NET Framework 3.5"
-        type: boolean
-        default: false
-      drivers:
-        description: "Add additional drivers (only for x64)"
-        type: boolean
-        default: false
+        description: 'Language'
+        required: false
+        default: 'en-us'
+        type: string
 
 jobs:
-  build:
+  build-config:
     runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        target: [windows-11]
+        architecture: [x64]
+        edition: [pro]
+        lang: [en-us]
+        # Override with workflow_dispatch inputs if triggered manually
+        include:
+          - target: ${{ github.event.inputs.windows_target || 'windows-11' }}
+            architecture: ${{ github.event.inputs.architecture || 'x64' }}
+            edition: ${{ github.event.inputs.edition || 'pro' }}
+            lang: ${{ github.event.inputs.language || 'en-us' }}
+      fail-fast: false
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up environment
+      run: |
+        # Install jq for JSON manipulation
+        sudo apt-get update
+        sudo apt-get install -y jq
+        
+        # Make script executable
+        chmod +x config-and-parameters.sh
+    
+    - name: Generate configuration
+      id: generate_config
+      run: |
+        echo "Generating configuration for:"
+        echo "  Target: ${{ matrix.target }}"
+        echo "  Architecture: ${{ matrix.architecture }}"
+        echo "  Edition: ${{ matrix.edition }}"
+        echo "  Language: ${{ matrix.lang }}"
+        
+        ./config-and-parameters.sh \
+          --windows-target-name "${{ matrix.target }}" \
+          --architecture "${{ matrix.architecture }}" \
+          --edition "${{ matrix.edition }}" \
+          --lang "${{ matrix.lang }}"
+        
+        # Verify the file was created
+        if [ ! -f windows-iso-config.json ]; then
+          echo "❌ Error: Configuration file was not generated"
+          exit 1
+        fi
+        
+        echo "✅ Configuration generated successfully"
+    
+    - name: Validate configuration
+      run: |
+        echo "Validating JSON structure..."
+        
+        # Validate JSON is well-formed
+        if ! jq empty windows-iso-config.json 2>/dev/null; then
+          echo "❌ Error: Invalid JSON format"
+          exit 1
+        fi
+        
+        # Extract and verify key values
+        TARGET=$(jq -r '.windowsTargetName' windows-iso-config.json)
+        ARCH=$(jq -r '.architecture' windows-iso-config.json)
+        EDITION=$(jq -r '.edition' windows-iso-config.json)
+        LANG=$(jq -r '.lang' windows-iso-config.json)
+        
+        echo "Configuration contents:"
+        echo "  windowsTargetName: $TARGET"
+        echo "  architecture: $ARCH"
+        echo "  edition: $EDITION"
+        echo "  lang: $LANG"
+        
+        # Verify values match inputs
+        if [ "$TARGET" != "${{ matrix.target }}" ]; then
+          echo "❌ Error: Target mismatch"
+          exit 1
+        fi
+        
+        if [ "$ARCH" != "${{ matrix.architecture }}" ]; then
+          echo "❌ Error: Architecture mismatch"
+          exit 1
+        fi
+        
+        if [ "$EDITION" != "${{ matrix.edition }}" ]; then
+          echo "❌ Error: Edition mismatch"
+          exit 1
+        fi
+        
+        if [ "$LANG" != "${{ matrix.lang }}" ]; then
+          echo "❌ Error: Language mismatch"
+          exit 1
+        fi
+        
+        # Verify required keys exist
+        REQUIRED_KEYS=("windowsTargetName" "destinationDirectory" "architecture" "arch" "edition" "lang" "esd" "drivers" "netfx3" "preview" "ringLower" "targets")
+        
+        for key in "${REQUIRED_KEYS[@]}"; do
+          if ! jq -e "has(\"$key\")" windows-iso-config.json > /dev/null 2>&1; then
+            echo "❌ Error: Missing required key: $key"
+            exit 1
+          fi
+        done
+        
+        echo "✅ All validations passed"
+    
+    - name: Display configuration
+      run: |
+        echo "Generated configuration:"
+        jq '.' windows-iso-config.json
+    
+    - name: Upload configuration artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ matrix.target }}-${{ matrix.architecture }}-${{ matrix.edition }}-${{ matrix.lang }}
+        path: windows-iso-config.json
+        retention-days: 7
+    
+    - name: Summary
+      run: |
+        echo "### Configuration Build Summary 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Target:** ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Architecture:** ${{ matrix.architecture }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Edition:** ${{ matrix.edition }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Language:** ${{ matrix.lang }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Configuration generated and validated successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "#### Configuration Preview" >> $GITHUB_STEP_SUMMARY
+        echo '```json' >> $GITHUB_STEP_SUMMARY
+        jq '.' windows-iso-config.json >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Map inputs to parameters
-        id: map
-        shell: bash
-        run: |
-          declare -A LANG_MAP=(
-            ["Arabic (Saudi Arabia)"]="ar-sa"
-            ["English (United States)"]="en-us"
-            ["English (United Kingdom)"]="en-gb"
-            ["French (France)"]="fr-fr"
-            ["German (Germany)"]="de-de"
-            ["Spanish (Spain)"]="es-es"
-            # Add more mappings as needed
-          )
-
-          declare -A VERSION_MAP=(
-            ["Windows 10 22H2"]="windows-10"
-            ["Windows 11 23H2"]="windows-11old"
-            ["Windows 11 24H2"]="windows-11"
-            ["Windows 11 24H2 BETA"]="windows-11beta"
-            ["Windows 11 25H2"]="windows-11new"
-            ["Windows 11 DEV"]="windows-11dev"
-            ["Windows 11 CANARY"]="windows-11canary"
-          )
-
-          LANG_CODE="${LANG_MAP[\"${{ inputs.language }}\"]}"
-          VER_CODE="${VERSION_MAP[\"${{ inputs.versions }}\"]}"
-
-          OPTS=""
-          [[ "${{ inputs.esd }}" == "true" ]] && OPTS+=" -esd"
-          [[ "${{ inputs.netfx3 }}" == "true" ]] && OPTS+=" -netfx3"
-          [[ "${{ inputs.drivers }}" == "true" ]] && OPTS+=" -drivers"
-
-          echo "lang-code=$LANG_CODE" >> $GITHUB_OUTPUT
-          echo "version-code=$VER_CODE" >> $GITHUB_OUTPUT
-          echo "options=$OPTS" >> $GITHUB_OUTPUT
-
-      - name: Run Configuration Script
-        shell: pwsh
-        run: |
-          .\scripts\config-and-parameters.ps1 `
-            -windowsTargetName "${{ steps.map.outputs.version-code }}" `
-            -destinationDirectory "output" `
-            -architecture "${{ inputs.architecture }}" `
-            -edition "${{ inputs.edition }}" `
-            -lang "${{ steps.map.outputs.lang-code }}" `
-            ${{ steps.map.outputs.options }}
-
-      - name: Upload configuration artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: config-files
-          path: windows-iso-config.json
-          retention-days: 1
+  build-multi-configs:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        config:
+          - target: windows-10
+            arch: x64
+            edition: pro
+          - target: windows-11
+            arch: x64
+            edition: pro
+          - target: windows-11
+            arch: arm64
+            edition: pro
+          - target: windows-11beta
+            arch: x64
+            edition: pro
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        chmod +x config-and-parameters.sh
+    
+    - name: Generate configuration - ${{ matrix.config.target }} (${{ matrix.config.arch }}, ${{ matrix.config.edition }})
+      run: |
+        ./config-and-parameters.sh \
+          --windows-target-name "${{ matrix.config.target }}" \
+          --architecture "${{ matrix.config.arch }}" \
+          --edition "${{ matrix.config.edition }}"
+        
+        if [ ! -f windows-iso-config.json ]; then
+          echo "❌ Configuration generation failed"
+          exit 1
+        fi
+        
+        echo "✅ Configuration generated"
+        jq '.' windows-iso-config.json
+    
+    - name: Upload configuration
+      uses: actions/upload-artifact@v4
+      with:
+        name: multi-config-${{ matrix.config.target }}-${{ matrix.config.arch }}-${{ matrix.config.edition }}
+        path: windows-iso-config.json
+        retention-days: 3
