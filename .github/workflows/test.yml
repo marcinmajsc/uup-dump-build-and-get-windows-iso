@@ -1,0 +1,105 @@
+name: Build Windows
+run-name: ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.architecture }} ${{ inputs.language }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Windows architecture to build"
+        type: choice
+        options: [x64, arm64]
+        default: x64
+      versions:
+        description: "Windows version to build"
+        type: choice
+        options:
+          - Windows 10 22H2
+          - Windows 11 23H2
+          - Windows 11 24H2
+          - Windows 11 24H2 BETA
+          - Windows 11 25H2
+          - Windows 11 DEV
+          - Windows 11 CANARY
+        default: Windows 11 25H2
+      edition:
+        description: "Windows edition to build"
+        type: choice
+        options: [Pro, Home, Multi]
+        default: Pro
+      language:
+        description: "Language"
+        type: choice
+        default: English (United States)
+      esd:
+        description: "Use ESD compression"
+        type: boolean
+        default: false
+      netfx3:
+        description: "Add .NET Framework 3.5"
+        type: boolean
+        default: false
+      drivers:
+        description: "Add additional drivers (only for x64)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Map inputs to parameters
+        id: map
+        shell: bash
+        run: |
+          declare -A LANG_MAP=(
+            ["Arabic (Saudi Arabia)"]="ar-sa"
+            ["English (United States)"]="en-us"
+            ["English (United Kingdom)"]="en-gb"
+            ["French (France)"]="fr-fr"
+            ["German (Germany)"]="de-de"
+            ["Spanish (Spain)"]="es-es"
+            # Add more mappings as needed
+          )
+
+          declare -A VERSION_MAP=(
+            ["Windows 10 22H2"]="windows-10"
+            ["Windows 11 23H2"]="windows-11old"
+            ["Windows 11 24H2"]="windows-11"
+            ["Windows 11 24H2 BETA"]="windows-11beta"
+            ["Windows 11 25H2"]="windows-11new"
+            ["Windows 11 DEV"]="windows-11dev"
+            ["Windows 11 CANARY"]="windows-11canary"
+          )
+
+          LANG_CODE="${LANG_MAP[\"${{ inputs.language }}\"]}"
+          VER_CODE="${VERSION_MAP[\"${{ inputs.versions }}\"]}"
+
+          OPTS=""
+          [[ "${{ inputs.esd }}" == "true" ]] && OPTS+=" -esd"
+          [[ "${{ inputs.netfx3 }}" == "true" ]] && OPTS+=" -netfx3"
+          [[ "${{ inputs.drivers }}" == "true" ]] && OPTS+=" -drivers"
+
+          echo "lang-code=$LANG_CODE" >> $GITHUB_OUTPUT
+          echo "version-code=$VER_CODE" >> $GITHUB_OUTPUT
+          echo "options=$OPTS" >> $GITHUB_OUTPUT
+
+      - name: Run Configuration Script
+        shell: pwsh
+        run: |
+          .\scripts\config-and-parameters.ps1 `
+            -windowsTargetName "${{ steps.map.outputs.version-code }}" `
+            -destinationDirectory "output" `
+            -architecture "${{ inputs.architecture }}" `
+            -edition "${{ inputs.edition }}" `
+            -lang "${{ steps.map.outputs.lang-code }}" `
+            ${{ steps.map.outputs.options }}
+
+      - name: Upload configuration artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-files
+          path: windows-iso-config.json
+          retention-days: 1
