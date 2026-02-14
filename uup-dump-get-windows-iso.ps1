@@ -9,7 +9,8 @@ param(
   [string]$lang = "en-us",
   [switch]$esd,
   [switch]$drivers,
-  [switch]$netfx3
+  [switch]$netfx3,
+  [string]$revision
 )
 
 Set-StrictMode -Version Latest
@@ -112,14 +113,17 @@ function Get-EditionName($e) {
   }
 }
 
+$dotSystemRevision = if ([string]::IsNullOrWhiteSpace($revision)) { '' } else { ".$revision" }
+$systemRevision = if ([string]::IsNullOrWhiteSpace($revision)) { '' } else { " $revision" }
+
 $TARGETS = @{
-  "windows-10"       = @{ search="windows 10 19045 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11old"    = @{ search="windows 11 22631 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11"       = @{ search="windows 11 26100 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11new"    = @{ search="windows 11 26200 $arch"; edition=(Get-EditionName $edition) }
-  "windows-11beta"   = @{ search="windows 11 26120 $arch"; edition=(Get-EditionName $edition); ring="Beta" }
-  "windows-11dev"    = @{ search="windows 11 26220 $arch"; edition=(Get-EditionName $edition); ring="Wif" }
-  "windows-11canary" = @{ search="windows 11 $arch"; edition=(Get-EditionName $edition); ring="Canary" }
+  "windows-10"       = @{ search="windows 10 19045$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
+  "windows-11old"    = @{ search="windows 11 22631$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
+  "windows-11"       = @{ search="windows 11 26100$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
+  "windows-11new"    = @{ search="windows 11 26200$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
+  "windows-11beta"   = @{ search="windows 11 26120$dotSystemRevision $arch"; edition=(Get-EditionName $edition); ring="Beta" }
+  "windows-11dev"    = @{ search="windows 11 26220$dotSystemRevision $arch"; edition=(Get-EditionName $edition); ring="Wif" }
+  "windows-11canary" = @{ search="windows 11$systemRevision $arch"; edition=(Get-EditionName $edition); ring="Canary" }
 }
 
 function New-QueryString([hashtable]$parameters) {
