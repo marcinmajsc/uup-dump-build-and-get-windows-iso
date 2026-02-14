@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build Windows Test
 run-name: ${{ inputs.versions }} ${{ inputs.edition }} ${{ inputs.architecture }} ${{ inputs.language }}
 
 on:
