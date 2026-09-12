@@ -206,20 +206,18 @@ L4: Got langs=$($langs -join ',')."
       $editions = $_.Value.editions.PSObject.Properties.Name
       $res = $true
 
-      $expectedRing = if ($ringLower) { $ringLower.ToUpper() } else { 'RETAIL' }
       if ($ringLower) {
         $actual = ($_.Value.info.ring).ToUpper()
-        if ($ringLower -in @('dev','beta')) {
-          if ($actual -notin @($expectedRing, 'WIF', 'WIS')) {
-            Write-CleanLine "Skipping.
-L5: Expected ring match for $expectedRing, WIS or WIF. Got ring=$actual."
-            $res = $false
-          }
-        } else {
-          if ($actual -ne $expectedRing) {
-            Write-CleanLine "Skipping. Expected ring match for $expectedRing. Got ring=$actual."
-            $res = $false
-          }
+        $allowedRings = switch ($ringLower) {
+          'canary' { 'CANARY', 'WIF' }
+          'dev'    { 'DEV', 'WIF', 'WIS' }
+          'beta'   { 'BETA', 'WIF', 'WIS' }
+          default { $ringLower.ToUpper() }
+        }
+
+        if ($actual -notin $allowedRings) {
+          Write-CleanLine "Skipping. Expected ring: $($allowedRings -join ', '). Got ring=$actual."
+          $res = $false
         }
       }
 
