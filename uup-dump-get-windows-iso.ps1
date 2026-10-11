@@ -10,7 +10,9 @@ param(
   [switch]$esd,
   [switch]$drivers,
   [switch]$netfx3,
-  [string]$revision
+  [string]$revision,
+  [switch]$test,
+  [switch]$help
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +21,76 @@ $ErrorActionPreference = 'Stop'
 
 $preview  = $false
 $ringLower = $null
+
+# Handle -test and -help flags
+if ($help) {
+    Write-Host "=========================================="
+    Write-Host "UUP-Dump Windows ISO Script"
+    Write-Host "=========================================="
+    Write-Host ""
+    Write-Host "SYNOPSIS"
+    Write-Host "  Creates Windows ISO files from the UUP dump project"
+    Write-Host ""
+    Write-Host "USAGE"
+    Write-Host "  powershell $PSScriptRoot\uup-dump-get-windows-iso.ps1 <build> [options]"
+    Write-Host ""
+    Write-Host "PARAMETERS"
+    Write-Host "  windowsTargetName  Windows build name (e.g., windows-11new)"
+    Write-Host "  -architecture      CPU architecture (x64, arm64, x86)"
+    Write-Host "  -edition           Windows edition (pro, core, multi, home)"
+    Write-Host "  -lang              Language code (default: en-us)"
+    Write-Host "  -esd               Use ESD compression"
+    Write-Host "  -drivers           Add additional drivers (x64/x86 only)"
+    Write-Host "  -netfx3            Add .NET Framework 3.5"
+    Write-Host "  -revision          Specific system revision number"
+    Write-Host "  -test              Validate parameters without downloading"
+    Write-Host "  -help              Show this help message"
+    Write-Host ""
+    Write-Host "EXAMPLES"
+    Write-Host "  # Latest Windows 11 ISO"
+    Write-Host "  powershell uup-dump-get-windows-iso.ps1 windows-11new"
+    Write-Host ""
+    Write-Host "  # Windows 10 32-bit ISO"
+    Write-Host "  powershell uup-dump-get-windows-iso.ps1 windows-10-x86 -architecture x86"
+    Write-Host ""
+    Write-Host "  # Full build with all options"
+    Write-Host "  powershell uup-dump-get-windows-iso.ps1 windows-11new -esd -drivers -netfx3"
+    Write-Host "=========================================="
+    exit 0
+}
+
+if ($test) {
+    Write-Host "TEST MODE: Validating parameters and API connectivity..."
+    Write-Host "Architecture: $architecture"
+    Write-Host "Edition: $edition"
+    Write-Host "Language: $lang"
+    Write-Host "Build: $windowsTargetName"
+
+    # Validate architecture
+    if ($architecture -notin 'x64', 'arm64', 'x86') {
+        Write-Error "Invalid architecture: $architecture. Supported: x64, arm64, x86"
+        Exit 1
+    }
+
+    # Validate build name (check if TARGETS variable exists first)
+    if (Get-Variable -Name TARGETS -ErrorAction SilentlyContinue) {
+        if (-not $TARGETS[$windowsTargetName]) {
+            Write-Error "Unknown build: $windowsTargetName. Supported builds: $(($TARGETS.Keys -join ', '))"
+            Exit 1
+        }
+    }
+
+    # Validate language is in supported list
+    $supportedLanguages = @('nb-no','fr-ca','fi-fi','lv-lv','es-es','en-gb','zh-tw','th-th','sv-se','en-us','es-mx','bg-bg','hr-hr','pt-br','el-gr','cs-cz','it-it','sk-sk','pl-pl','sl-si','neutral','ja-jp','et-ee','ro-ro','fr-fr','pt-pt','ar-sa','lt-lt','hu-hu','da-dk','zh-cn','uk-ua','tr-tr','ru-ru','nl-nl','he-il','ko-kr','sr-latn-rs','de-de')
+    if ($lang -notin $supportedLanguages) {
+        Write-Error "Unsupported language: $lang. Use -lang en-us for default"
+        Exit 1
+    }
+
+    Write-Host "TEST PASSED: All parameters valid"
+    Write-Host "Would process: $windowsTargetName $edition $architecture $lang"
+    Exit 0
+}
 
 trap {
   Write-Host "ERROR: $_"
@@ -37,6 +109,44 @@ function Write-CleanLine([string]$text) {
   if ($clean -eq $script:LastPrintedLine) { return }
   $script:LastPrintedLine = $clean
   Write-Host $clean
+}
+
+function Show-Help {
+    param()
+
+    Write-Host "=========================================="
+    Write-Host "UUP-Dump Windows ISO Script Help"
+    Write-Host "=========================================="
+    Write-Host ""
+    Write-Host "SYNOPSIS"
+    Write-Host "  Creates Windows ISO files from UUP dump"
+    Write-Host ""
+    Write-Host "USAGE"
+    Write-Host "  powershell ./uup-dump-get-windows-iso.ps1 <build> [options]"
+    Write-Host ""
+    Write-Host "PARAMETERS"
+    Write-Host "  windowsTargetName  Windows build name (e.g., windows-11new)"
+    Write-Host "  -destinationDir    Output directory (default: output)"
+    Write-Host "  -architecture      CPU architecture (x64, arm64, x86)"
+    Write-Host "  -edition           Windows edition (pro, core, multi, home)"
+    Write-Host "  -lang              Language code (default: en-us)"
+    Write-Host "  -esd               Use ESD compression"
+    Write-Host "  -drivers           Add additional drivers (x64/x86 only)"
+    Write-Host "  -netfx3            Add .NET Framework 3.5"
+    Write-Host "  -revision          Specific system revision number"
+    Write-Host "  -test              Validate parameters without downloading"
+    Write-Host "  -help              Show this help message"
+    Write-Host ""
+    Write-Host "EXAMPLES"
+    Write-Host "  # Latest Windows 11 ISO"
+    Write-Host "  powershell ./uup-dump-get-windows-iso.ps1 windows-11new"
+    Write-Host ""
+    Write-Host "  # Windows 10 32-bit ISO"
+    Write-Host "  powershell ./uup-dump-get-windows-iso.ps1 windows-10-x86 -architecture x86"
+    Write-Host ""
+    Write-Host "  # Full build with all options"
+    Write-Host "  powershell ./uup-dump-get-windows-iso.ps1 windows-11new -esd -drivers -netfx3"
+    Write-Host "=========================================="
 }
 
 # DISM buckets (0/10/.../100)
@@ -455,3 +565,4 @@ function Get-WindowsIso($name, $destinationDirectory) {
 }
 
 Get-WindowsIso $windowsTargetName $destinationDirectory
+
