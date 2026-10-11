@@ -13,15 +13,17 @@ Once the GitHub actions are complete, you'll receive a finished ISO image in two
 Additionally, for each release, packages are created for various systems and architectures, containing a ready-made script that downloads all parts of the split ISO and returns the finished ISO file.
 2. Artifacts - a single zip file, but logging in to the website is required to download.
 
-# You can also executed directly on a Windows x64 or arm64 host (min. 21H2).
+# You can also executed directly on a Windows x64, arm64, or x86 host (min. PowerShell 5.1 / Windows 7 compatible).
 
 ## This supports the following: 
+
 Windows Builds:
 * `windows-10`: Windows 10 19045 (aka 22H2)
+* `windows-10-x86`: Windows 10 32-bit (x86) 19045 (aka 22H2)
 * `windows-11old`: Windows 11 22631 (aka 23H2)
 * `windows-11`: Windows 11 26100 (aka 24H2)
-* `windows-11beta`: Windows 11 26120 (aka 24H2 BETA)
 * `windows-11new`: Windows 11 26200 (aka 25H2)
+* `windows-11beta`: Windows 11 26120 (aka 24H2 BETA)
 * `windows-11dev`: Windows 11 26220 (aka 25H2 BETA)
 * `windows-1126h1`: Windows 11 28000 (aka 26H1) <details><summary>Details</summary>for new 2026 devices with select new silicon (e.g., Snapdragon X2) to enable new hardware innovations - not for existing PCs or general enterprise deployments.</details>
 
@@ -34,6 +36,7 @@ Windows Builds:
 Architecture:
 * `x64`
 * `arm64`
+* `x86` (32-bit)
 
 
 Edition:
@@ -85,12 +88,30 @@ Language:
 
 Additional options:
 * `esd`: Use ESD compression
-* `drivers`: Add drivers from Drivers folder
+* `drivers`: Add drivers from Drivers folder (compatible with x64 and x86, not arm64)
 * `netfx3`: Add .NET Framework 3.5
 * `revision`: System Revision Number
 
 
-## Usage
+## Linux Compatibility
+
+This script can be run on PowerShell 7+ on Linux (via pwsh). Note the following limitations and considerations:
+
+- ISO mounting uses 7-Zip extraction instead of DISM (since DISM cmdlets are Windows-specific)
+- Progress tracking adapts to different log formats
+- aria2 flags are patched using PowerShell fallback when `sed` is not available
+- Chocolatey is not required; the script detects and uses system package managers or bundled aria2
+- Some Windows 11 specific features may have reduced functionality on Linux
+
+## Windows 7 / PowerShell 5.1 Compatibility
+
+- Requires PowerShell 5.1 or PowerShell 7+
+- `Get-FileHash` uses SHA256 algorithm compatible with both versions
+- JSON output uses compatible depth settings
+- ISO extraction adapts based on available tools (7-Zip preferred)
+- Some advanced progress tracking features may be limited
+
+### Usage
 
 Get the latest Windows 11 25H2 iso:
 
@@ -106,31 +127,14 @@ You can also download the system revision of your choice. For example, if you wa
 powershell uup-dump-get-windows-iso.ps1 windows-11new c:/output -architecture x64 -edition pro -lang en-us -esd -drivers -netfx3 -revision 7705
 ```
 
+Get a 32-bit Windows 10 ISO:
 
-## Tags structure
-
-```text
-  .------------------------------- OS Build
-  |    .-------------------------- System Revision
-  |    |    .--------------------- Release Channel/Version
-  |    |    |    .---------------- System Edition
-  |    |    |    |   .------------ CPU architecture
-  |    |    |    |   |  .--------- Language
-  |    |    |    |   |  |  .------ Image is compressed by ESD (optional)
-  |    |    |    |   |  |  | .---- Include additional drivers (optional)
-  |    |    |    |   |  |  | | .-- Include .NET Framework 3.5 (optional)
-__|__ _|__ _|__ _|_ _|_ |_ | | |
-26200.7899.25H2.PRO.X64.PL.E.D.N
+```bash
+powershell uup-dump-get-windows-iso.ps1 windows-10-x86 c:/output -architecture x86 -edition pro -lang en-us
 ```
 
-## Related Tools
+Get the latest 32-bit Windows 10 ISO with all options:
 
-* [Rufus](https://github.com/pbatard/rufus)
-* [Fido](https://github.com/pbatard/Fido)
-* [windows-evaluation-isos-scraper](https://github.com/rgl/windows-evaluation-isos-scraper)
-
-## Reference
-
-* [UUP dump home](https://uupdump.net)
-* [UUP dump source code](https://git.uupdump.net/uup-dump)
-* [Unified Update Platform (UUP)](https://docs.microsoft.com/en-us/windows/deployment/update/windows-update-overview)
+```bash
+powershell uup-dump-get-windows-iso.ps1 windows-10-x86 c:/output -architecture x86 -edition pro -lang en-us -esd -drivers -netfx3
+```

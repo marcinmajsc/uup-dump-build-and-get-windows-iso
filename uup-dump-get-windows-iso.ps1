@@ -3,7 +3,7 @@
 param(
   [string]$windowsTargetName,
   [string]$destinationDirectory = 'output',
-  [ValidateSet("x64", "arm64")] [string]$architecture = "x64",
+  [ValidateSet("x64", "arm64", "x86")] [string]$architecture = "x64",
   [ValidateSet("pro", "core", "multi", "home")] [string]$edition = "pro",
   [ValidateSet("nb-no", "fr-ca", "fi-fi", "lv-lv", "es-es", "en-gb", "zh-tw", "th-th", "sv-se", "en-us", "es-mx", "bg-bg", "hr-hr", "pt-br", "el-gr", "cs-cz", "it-it", "sk-sk", "pl-pl", "sl-si", "neutral", "ja-jp", "et-ee", "ro-ro", "fr-fr", "pt-pt", "ar-sa", "lt-lt", "hu-hu", "da-dk", "zh-cn", "uk-ua", "tr-tr", "ru-ru", "nl-nl", "he-il", "ko-kr", "sr-latn-rs", "de-de")]
   [string]$lang = "en-us",
@@ -97,7 +97,7 @@ function Process-ProgressLine([string]$line) {
 # ------------------------------
 # Basic metadata helpers
 # ------------------------------
-$arch = if ($architecture -eq "x64") { "amd64" } else { "arm64" }
+$arch = if ($architecture -eq "x64") { "amd64" } elseif ($architecture -eq "x86") { "x86" } else { "arm64" }
 
 if ($windowsTargetName -match 'beta|dev|wif|canary') {
   $preview = $true
@@ -118,6 +118,7 @@ $systemRevision = if ([string]::IsNullOrWhiteSpace($revision)) { '' } else { " $
 
 $TARGETS = @{
   "windows-10"           = @{ search="windows 10 19045$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
+  "windows-10-x86"       = @{ search="windows 10 19045$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
   "windows-11old"        = @{ search="windows 11 22631$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
   "windows-11"           = @{ search="windows 11 26100$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
   "windows-11new"        = @{ search="windows 11 26200$dotSystemRevision $arch"; edition=(Get-EditionName $edition) }
