@@ -278,6 +278,10 @@ function Get-UupDumpIso($name, $target) {
             Write-CleanLine "Skipping, ignore .NET Framework update."
             return $false
         }
+      if ($_.Value.title -match 'Windows CPC OS') {
+            Write-CleanLine "Skipping, ignore Windows CPC OS."
+            return $false
+        }
       if (!$preview) {
         $ok = ($target.search -like '*preview*') -or ($_.Value.title -notlike '*preview*')
         if (-not $ok) {

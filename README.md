@@ -113,13 +113,13 @@ This script can be run on PowerShell 7+ on Linux (via pwsh). Note the following 
 
 ### Usage
 
-Get the latest Windows 11 25H2 iso:
+Get the latest Windows 11 26H2 iso:
 
 ```bash
-powershell uup-dump-get-windows-iso.ps1 windows-11new c:/output -architecture x64 -edition pro -lang en-us -esd -drivers -netfx3
+powershell uup-dump-get-windows-iso.ps1 windows-1126h2 c:/output -architecture x64 -edition pro -lang en-us -esd -drivers -netfx3
 ```
 
-When everything works correctly, you'll have the iso in the `output` directory at, e.g., `c:/output/26200.7899.250826-1428.25H2_GE_RELEASE_SVC_PROD3_CLIENTPRO_OEMRET_X64FRE_PL-PL.ISO`.
+When everything works correctly, you'll have the iso in the `output` directory at, e.g., `c:/output/26300.9711.261009-2244.26H2_GE_RELEASE_SVC_PROD1_CLIENTPRO_OEMRET_X64FRE_EN-US.l.ISO`.
 
 You can also download the system revision of your choice. For example, if you want to build 25H2 26200.7705 iso:
 
