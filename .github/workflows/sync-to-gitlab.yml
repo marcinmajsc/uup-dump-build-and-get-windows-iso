@@ -1,0 +1,64 @@
+name: Sync to GitLab mirror
+
+# GitHub -> GitLab half of the bidirectional mirror. It uses a write-enabled
+# GitLab deploy key stored in the GITLAB_DEPLOY_KEY repository secret.
+# The GitLab -> GitHub half is a native GitLab push mirror using a GitHub
+# deploy token. Identical pushes are no-ops, so this cannot loop.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Avoid two pushes racing each other when the branch and a tag are pushed
+# together.
+concurrency:
+  group: mirror-to-gitlab
+  cancel-in-progress: false
+
+jobs:
+  push-to-gitlab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "Mirror Bot"
+          git config user.email "mirror-bot@users.noreply.github.com"
+
+      - name: Push refs to GitLab
+        env:
+          GITLAB_DEPLOY_KEY: ${{ secrets.GITLAB_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          : "${GITLAB_DEPLOY_KEY:?GITLAB_DEPLOY_KEY secret is required}"
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "${GITLAB_DEPLOY_KEY}" | ssh-add -
+          mkdir -p "${HOME}/.ssh"
+          ssh-keyscan -t ed25519 gitlab.com >> "${HOME}/.ssh/known_hosts"
+          git remote add gitlab git@gitlab.com:essential_repos/uup-dump-build-and-get-windows-iso-2026.git
+          git push gitlab HEAD:main
+
+          # Tags cannot be updated in place; only push the ones that are missing
+          # or that point to a different commit on GitLab. Compare peeled SHAs
+          # because checkout creates lightweight tags while pushes may be annotated.
+          remote_tags="$(mktemp)"
+          git ls-remote --tags gitlab > "${remote_tags}"
+          while read -r tag; do
+            ref="refs/tags/${tag}"
+            local_sha="$( git rev-parse "${ref}^{}" )"
+            if ! awk -v ref="${ref}" '$2 == ref || $2 == ref "^{}" { print $1 }' "${remote_tags}" \
+                | grep -Fxq "${local_sha}"; then
+              git push gitlab "${ref}:${ref}"
+            fi
+          done < <( git tag --list )
